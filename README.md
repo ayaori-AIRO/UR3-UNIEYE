@@ -154,6 +154,47 @@ MoveIt succeeded: SUCCESS; ...; mode=PLAN + EXECUTE
 
 계획이나 controller 실행에 실패하면 오류를 출력하고 종료 코드 `1`로 종료합니다.
 
+## Joint 목표 이동
+
+`move_to_joint`는 UR3의 6축 joint 목표를 MoveIt으로 계획합니다. 입력 순서는 다음과
+같습니다.
+
+```text
+shoulder_pan_joint shoulder_lift_joint elbow_joint
+wrist_1_joint wrist_2_joint wrist_3_joint
+```
+
+기본 입력 단위는 rad이며, `--execute`가 없으면 Plan-only로 동작합니다. 아래의 `J1`부터
+`J6`까지는 임의의 예제 값이 아니라 `robot_state`로 확인한 현재 값과 가까운 안전한 목표로
+교체해야 합니다.
+
+```bash
+ros2 run ur3_moveit_examples move_to_joint \
+  J1 J2 J3 J4 J5 J6
+```
+
+degree 단위로 입력하려면 `--degrees`를 사용합니다.
+
+```bash
+ros2 run ur3_moveit_examples move_to_joint \
+  J1 J2 J3 J4 J5 J6 \
+  --degrees
+```
+
+Plan-only와 RViz 경로를 확인한 후 동일한 목표를 실제로 실행합니다.
+
+```bash
+ros2 run ur3_moveit_examples move_to_joint \
+  J1 J2 J3 J4 J5 J6 \
+  --execute \
+  --velocity-scaling 0.1 \
+  --acceleration-scaling 0.1
+```
+
+최초 실제 시험에서는 현재 joint 값 중 하나만 약 `0.03~0.05rad` 변경하는 것을
+권장합니다. MoveIt은 robot model의 joint limit과 충돌 여부를 검사하며, 유효하지 않은
+목표나 경로는 실행하지 않습니다.
+
 ## 주요 옵션
 
 ```text
