@@ -259,5 +259,56 @@ ros2 run ur3_moveit_examples move_to_joint \
 - 실행 전 `scaled_joint_trajectory_controller`가 `active`인지 확인하세요.
 - 실제 실행 전에 항상 동일한 목표를 Plan-only로 먼저 검증하세요.
 
-기본 위치 허용 오차는 5mm, orientation 허용 오차는 0.01rad입니다. 목표 pose는
+기본 실행 후 위치 검증 오차는 5mm, orientation 검증 오차는 0.02rad입니다. 목표 pose는
 `base_link` 좌표계에서 표현한 `tool0`의 pose입니다.
+
+## Python 클래스 API
+
+여러 동작을 하나의 ROS 노드에서 연속 실행할 때는 `UR3MoveItController` 클래스를 사용할
+수 있습니다. 호출 측에서 `rclpy.init()`과 종료 처리를 담당합니다.
+
+```python
+import rclpy
+
+from ur3_moveit_examples import UR3MoveItController
+
+
+rclpy.init()
+robot = UR3MoveItController(
+    velocity_scaling=0.05,
+    acceleration_scaling=0.05,
+    max_joint_travel=0.15,
+)
+
+try:
+    joints = robot.get_current_joint_positions()
+    pose = robot.get_current_pose()
+
+    planned = robot.move_to_pose(
+        x=0.01,
+        y=-0.34,
+        z=0.59,
+        qx=0.18,
+        qy=0.69,
+        qz=-0.57,
+        qw=0.39,
+        execute=False,
+    )
+
+    # 실제 실행은 동일한 호출에 execute=True를 명시합니다.
+    # 내부에서 다시 계획하지만, 그 계획을 검사한 뒤 동일 trajectory만 실행합니다.
+finally:
+    robot.destroy_node()
+    rclpy.shutdown()
+```
+
+제공 메서드:
+
+```text
+get_current_joint_positions()
+get_current_pose()
+move_to_joint(joint_positions, execute=False)
+move_to_pose(x, y, z, qx, qy, qz, qw, execute=False)
+```
+
+기존 `ros2 run` 명령도 동일하게 유지되며, 내부적으로 이 클래스를 호출합니다.
