@@ -4,12 +4,20 @@
 import argparse
 import math
 import sys
+import time
 
 import rclpy
-from moveit_msgs.action import MoveGroup
+from moveit_msgs.action import ExecuteTrajectory, MoveGroup
 from moveit_msgs.msg import Constraints, JointConstraint, MoveItErrorCodes
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import JointState
+
+from ur3_moveit_examples.trajectory_safety import (
+    joint_excursions,
+    trajectory_duration_seconds,
+)
 
 
 UR_JOINT_NAMES = (
@@ -34,6 +42,25 @@ class MoveToJointOnce(Node):
     def __init__(self) -> None:
         super().__init__("ur3_move_to_joint_once")
         self._client = ActionClient(self, MoveGroup, "/move_action")
+        self._execute_client = ActionClient(
+            self, ExecuteTrajectory, "/execute_trajectory"
+        )
+        self._joint_positions: dict[str, float] | None = None
+        self._joint_state_sequence = 0
+        self.create_subscription(
+            JointState,
+            "/joint_states",
+            self._joint_state_callback,
+            qos_profile_sensor_data,
+        )
+
+    def _joint_state_callback(self, message: JointState) -> None:
+        positions = dict(zip(message.name, message.position))
+        if all(name in positions for name in UR_JOINT_NAMES):
+            self._joint_positions = {
+                name: positions[name] for name in UR_JOINT_NAMES
+            }
+            self._joint_state_sequence += 1
 
     def run(self, args: argparse.Namespace) -> bool:
         self.get_logger().info("Waiting for MoveIt /move_action ...")
@@ -42,10 +69,17 @@ class MoveToJointOnce(Node):
                 "MoveIt action server was not found. Is ur_moveit.launch.py running?"
             )
             return False
+        if args.execute and not self._execute_client.wait_for_server(
+            timeout_sec=args.server_timeout
+        ):
+            self.get_logger().error(
+                "MoveIt /execute_trajectory action server was not found."
+            )
+            return False
 
         positions = self._positions_in_radians(args)
         goal = self._make_goal(args, positions)
-        mode = "PLAN + EXECUTE" if args.execute else "PLAN ONLY"
+        mode = "PLAN FOR EXECUTION" if args.execute else "PLAN ONLY"
 
         self.get_logger().warn(f"{mode}: joint target [rad]")
         for name, position in zip(UR_JOINT_NAMES, positions):
@@ -80,10 +114,123 @@ class MoveToJointOnce(Node):
             return False
 
         self.get_logger().info(
-            f"MoveIt succeeded: {code_name}; planning_time="
+            f"MoveIt planning succeeded: {code_name}; planning_time="
             f"{result.planning_time:.3f} s; trajectory_points={point_count}; mode={mode}"
         )
+
+        if not self._inspect_trajectory(result, args):
+            return False
+        if args.execute:
+            if not self._execute_trajectory(result.planned_trajectory):
+                return False
+            return self._verify_joint_goal(positions, args)
         return True
+
+    def _inspect_trajectory(self, result, args: argparse.Namespace) -> bool:
+        trajectory = result.planned_trajectory
+        excursions = joint_excursions(result.trajectory_start, trajectory)
+        if not excursions:
+            self.get_logger().error("Planned trajectory contains no joint points.")
+            return False
+
+        maximum_name = max(excursions, key=excursions.get)
+        maximum = excursions[maximum_name]
+        duration = trajectory_duration_seconds(trajectory)
+        self.get_logger().info(
+            f"Trajectory inspection: duration={duration:.3f} s, "
+            f"maximum_joint_travel={maximum:.6f} rad ({maximum_name})"
+        )
+        for name, travel in excursions.items():
+            self.get_logger().info(f"  {name}: maximum_travel={travel:.6f} rad")
+
+        if args.execute and maximum > args.max_joint_travel:
+            self.get_logger().error(
+                "Execution blocked: planned joint travel exceeds the configured "
+                f"limit. maximum={maximum:.6f} rad, limit="
+                f"{args.max_joint_travel:.6f} rad, joint={maximum_name}"
+            )
+            return False
+        return True
+
+    def _execute_trajectory(self, trajectory) -> bool:
+        goal = ExecuteTrajectory.Goal()
+        goal.trajectory = trajectory
+        self.get_logger().warn("Executing the exact inspected trajectory ...")
+
+        send_future = self._execute_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, send_future)
+        goal_handle = send_future.result()
+        if goal_handle is None or not goal_handle.accepted:
+            self.get_logger().error("MoveIt rejected the trajectory execution goal.")
+            return False
+
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, result_future)
+        wrapped_result = result_future.result()
+        if wrapped_result is None:
+            self.get_logger().error("No trajectory execution result received.")
+            return False
+
+        code = wrapped_result.result.error_code.val
+        code_name = ERROR_NAMES.get(code, f"UNKNOWN_ERROR_{code}")
+        if code != MoveItErrorCodes.SUCCESS:
+            self.get_logger().error(
+                f"Trajectory execution failed: {code_name} ({code})"
+            )
+            return False
+
+        self.get_logger().info(f"Trajectory execution succeeded: {code_name}")
+        return True
+
+    def _verify_joint_goal(
+        self, target_positions: list[float], args: argparse.Namespace
+    ) -> bool:
+        self.get_logger().info("Verifying the actual joint positions ...")
+        deadline = time.monotonic() + args.verify_timeout
+        sequence_at_start = self._joint_state_sequence
+        errors = None
+
+        while time.monotonic() < deadline:
+            # Require state feedback after MoveIt reports execution completion.
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if (
+                self._joint_positions is None
+                or self._joint_state_sequence <= sequence_at_start
+            ):
+                continue
+
+            errors = {
+                name: abs(self._joint_positions[name] - target)
+                for name, target in zip(UR_JOINT_NAMES, target_positions)
+            }
+            maximum_error = max(errors.values())
+            if maximum_error <= args.verify_joint_tolerance:
+                self.get_logger().info(
+                    "Goal verification succeeded: maximum_joint_error="
+                    f"{maximum_error:.6f} rad, tolerance="
+                    f"{args.verify_joint_tolerance:.6f} rad"
+                )
+                return True
+
+        if self._joint_positions is None or errors is None:
+            self.get_logger().error(
+                "Goal verification failed: no complete /joint_states message received."
+            )
+            return False
+
+        self.get_logger().error(
+            "Goal verification failed: the actual joints did not reach the target "
+            f"within {args.verify_timeout:.1f} s."
+        )
+        for name, target in zip(UR_JOINT_NAMES, target_positions):
+            actual = self._joint_positions[name]
+            error = errors[name]
+            marker = "FAILED" if error > args.verify_joint_tolerance else "OK"
+            self.get_logger().error(
+                f"  {name}: target={target:.6f}, actual={actual:.6f}, "
+                f"error={error:.6f} rad [{marker}]"
+            )
+        return False
 
     @staticmethod
     def _positions_in_radians(args: argparse.Namespace) -> list[float]:
@@ -116,7 +263,8 @@ class MoveToJointOnce(Node):
         request.start_state.is_diff = True
         request.goal_constraints = [constraints]
 
-        goal.planning_options.plan_only = not args.execute
+        # Execution is deliberately separate so the inspected plan is the one run.
+        goal.planning_options.plan_only = True
         goal.planning_options.look_around = False
         goal.planning_options.replan = False
         goal.planning_options.planning_scene_diff.is_diff = True
@@ -170,6 +318,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--planning-time", type=positive, default=5.0)
     parser.add_argument("--planning-attempts", type=int, default=5)
     parser.add_argument("--joint-tolerance", type=positive, default=0.001)
+    parser.add_argument("--verify-joint-tolerance", type=positive, default=0.01)
+    parser.add_argument("--verify-timeout", type=positive, default=3.0)
+    parser.add_argument(
+        "--max-joint-travel",
+        type=positive,
+        default=0.5,
+        help="Block execution if any joint travels farther than this many radians.",
+    )
     parser.add_argument("--server-timeout", type=positive, default=10.0)
     parser.add_argument("--group", default="ur_manipulator")
     args = parser.parse_args(argv)

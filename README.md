@@ -150,9 +150,39 @@ MoveIt은 경로를 계획하고 설정된 controller manager를 통해 trajecto
 
 ```text
 MoveIt succeeded: SUCCESS; ...; mode=PLAN + EXECUTE
+Goal verification succeeded: position_error=... m, orientation_error=... rad
 ```
 
-계획이나 controller 실행에 실패하면 오류를 출력하고 종료 코드 `1`로 종료합니다.
+MoveIt 실행 성공 후 최신 TF를 조회하여 실제 TCP가 목표 위치 및 자세 허용 오차 안에
+도달했는지 추가로 검사합니다. 계획, controller 실행 또는 최종 상태 검증에 실패하면
+오류를 출력하고 종료 코드 `1`로 종료합니다.
+
+`--execute`를 사용해도 MoveIt에는 먼저 Plan-only 요청을 보냅니다. 반환된 trajectory의
+관절 이동량을 검사한 뒤, 검사한 동일 trajectory를 `/execute_trajectory` 액션으로
+실행합니다. 실행 단계에서 IK나 경로를 다시 계산하지 않습니다.
+
+Pose 목표는 `/compute_ik` 서비스에 최신 `/joint_states`를 seed로 제공하여 먼저
+collision-aware IK joint 해로 변환합니다. 반환된 IK 해가 현재 관절 자세에서 설정된 최대
+이동량보다 멀면 계획 전에 거부합니다. 통과한 IK 해를 명시적인 joint goal로 사용하므로
+pose constraint sampler가 먼 elbow/wrist configuration이나 `2π` winding 해를 다시
+선택하지 않습니다.
+
+기본적으로 한 관절이라도 계획 시작점에서 `0.5rad`보다 멀리 움직이는 계획은 실행 전에
+차단됩니다.
+
+```text
+Execution blocked: planned joint travel exceeds the configured limit.
+```
+
+의도적으로 더 먼 이동이 필요할 때만 Plan-only 결과를 확인하고 제한값을 명시적으로
+높이세요.
+
+```bash
+ros2 run ur3_moveit_examples move_to_pose \
+  X Y Z QX QY QZ QW \
+  --execute \
+  --max-joint-travel 1.0
+```
 
 ## Joint 목표 이동
 
@@ -191,6 +221,9 @@ ros2 run ur3_moveit_examples move_to_joint \
   --acceleration-scaling 0.1
 ```
 
+실행 후에는 최신 `/joint_states`를 이용하여 모든 joint가 목표 허용 오차 안에 들어왔는지
+검사합니다. 기본 검증 허용 오차는 `0.01rad`, 제한 시간은 3초입니다.
+
 최초 실제 시험에서는 현재 joint 값 중 하나만 약 `0.03~0.05rad` 변경하는 것을
 권장합니다. MoveIt은 robot model의 joint limit과 충돌 여부를 검사하며, 유효하지 않은
 목표나 경로는 실행하지 않습니다.
@@ -203,8 +236,15 @@ ros2 run ur3_moveit_examples move_to_joint \
 --acceleration-scaling VALUE    가속도 배율, 기본값 0.1
 --planning-time VALUE           최대 계획 시간, 기본값 5.0초
 --planning-attempts VALUE       계획 시도 횟수, 기본값 5
---position-tolerance VALUE      위치 허용 오차, 기본값 0.005m
---orientation-tolerance VALUE   자세 허용 오차, 기본값 0.01rad
+--ik-timeout VALUE              IK 계산 제한 시간, 기본값 1초
+--ik-joint-tolerance VALUE      계획할 IK joint 목표 오차, 기본값 0.001rad
+--verify-joint-tolerance VALUE  실행 후 joint 검증 오차, 기본값 0.01rad
+--verify-position-tolerance VALUE
+                                실행 후 TCP 위치 검증 오차, 기본값 0.005m
+--verify-orientation-tolerance VALUE
+                                실행 후 TCP 자세 검증 오차, 기본값 0.02rad
+--verify-timeout VALUE          실행 후 목표 검증 제한 시간, 기본값 3초
+--max-joint-travel VALUE        관절별 최대 계획 이동량, 기본값 0.5rad
 ```
 
 속도 및 가속도 배율은 `(0, 1]` 범위만 허용됩니다.
