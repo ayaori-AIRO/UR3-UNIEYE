@@ -20,6 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "move_to_pose = ur3_moveit_examples.move_to_pose:main",
+            "robot_state = ur3_moveit_examples.robot_state:main",
         ],
     },
 )

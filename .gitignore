@@ -1,0 +1,21 @@
+# Python generated files
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ROS 2 / colcon outputs
+build/
+install/
+log/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+*~
+
+# Robot-specific calibration and secrets
+*_calibration.yaml
+.env
+*.key
+*.pem

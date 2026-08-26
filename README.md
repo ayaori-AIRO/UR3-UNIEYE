@@ -89,6 +89,25 @@ ros2 run tf2_ros tf2_echo base_link tool0
 qx qy qz qw
 ```
 
+## 현재 로봇 상태 출력
+
+이 패키지의 읽기 전용 노드로 UR3의 6축 joint position과 현재 TCP pose를 한 번에 확인할
+수 있습니다. 이 명령은 로봇에 이동 명령을 보내지 않습니다.
+
+```bash
+ros2 run ur3_moveit_examples robot_state
+```
+
+joint position은 rad와 degree로 출력되며, TCP pose는 `base_link → tool0` 기준의 위치와
+quaternion으로 출력됩니다. 기본 TF frame이나 대기 시간을 변경할 수도 있습니다.
+
+```bash
+ros2 run ur3_moveit_examples robot_state \
+  --base-frame base_link \
+  --ee-frame tool0 \
+  --timeout 10.0
+```
+
 ## 1단계: Plan-only
 
 아래 인자의 순서는 `x y z qx qy qz qw`입니다. 위치 단위는 m이며 quaternion은 코드에서
