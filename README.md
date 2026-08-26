@@ -310,6 +310,7 @@ get_current_pose()
 move_to_joint(joint_positions, execute=False)
 move_to_pose(x, y, z, qx, qy, qz, qw, execute=False)
 move_relative_tool(dx, dy, dz, execute=False)
+move_cartesian_relative_tool(dx, dy, dz, execute=False)
 ```
 
 기존 `ros2 run` 명령도 동일하게 유지되며, 내부적으로 이 클래스를 호출합니다.
@@ -364,3 +365,33 @@ ros2 run ur3_moveit_examples move_relative_tool \
 `-Z`인지는 Plan-only 경로와 TF 축을 통해 반드시 먼저 확인해야 합니다. 이 명령은 목표
 pose까지 MoveIt 일반 planning을 수행하며 TCP가 직선을 따라간다는 보장은 없습니다.
 5mm 시험의 기본 위치 검증 허용오차는 3mm입니다.
+
+## 공구축 Cartesian 직선 이동
+
+`move_cartesian_tool`은 현재 공구 좌표계의 상대 이동 목표를 계산한 뒤 MoveIt Humble의
+`/compute_cartesian_path`를 사용하여 TCP 직선 경로를 생성합니다. 먼저 공구 `+Z` 방향
+5mm 경로를 Plan-only로 확인합니다.
+
+```bash
+ros2 run ur3_moveit_examples move_cartesian_tool \
+  0 0 0.005 \
+  --max-step 0.001 \
+  --max-joint-travel 0.15
+```
+
+경로 fraction이 기본값 `0.999` 이상이어야 수락되며 collision avoidance와 joint jump
+검사를 적용합니다. RViz에서 직선 방향과 주변 간섭을 확인한 뒤 실행합니다.
+
+```bash
+ros2 run ur3_moveit_examples move_cartesian_tool \
+  0 0 0.005 \
+  --execute \
+  --max-step 0.001 \
+  --max-joint-travel 0.15 \
+  --velocity-scaling 0.05 \
+  --acceleration-scaling 0.05
+```
+
+Humble의 Cartesian 서비스가 생성한 시간화 trajectory를 지정한 scaling 이하가 되도록
+더 느리게 조정하고, 검사한 동일 trajectory를 실행합니다. `fraction < 0.999`, 충돌,
+joint jump 또는 최대 관절 이동량 초과가 발생하면 실행하지 않습니다.

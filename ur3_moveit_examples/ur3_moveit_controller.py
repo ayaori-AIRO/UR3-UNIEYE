@@ -7,7 +7,7 @@ import rclpy
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
 from moveit_msgs.msg import Constraints, JointConstraint, MoveItErrorCodes
-from moveit_msgs.srv import GetPositionIK
+from moveit_msgs.srv import GetCartesianPath, GetPositionIK
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -84,6 +84,9 @@ class UR3MoveItController(Node):
             self, ExecuteTrajectory, "/execute_trajectory"
         )
         self._ik_client = self.create_client(GetPositionIK, "/compute_ik")
+        self._cartesian_client = self.create_client(
+            GetCartesianPath, "/compute_cartesian_path"
+        )
         self._joint_positions: dict[str, float] | None = None
         self._joint_state_sequence = 0
         self.create_subscription(
@@ -274,6 +277,149 @@ class UR3MoveItController(Node):
             execute=execute,
         )
 
+    def move_cartesian_relative_tool(
+        self,
+        dx: float,
+        dy: float,
+        dz: float,
+        *,
+        execute: bool = False,
+        max_step: float = 0.001,
+        jump_threshold: float = 2.0,
+        minimum_fraction: float = 0.999,
+    ) -> bool:
+        """Move the TCP along a collision-checked straight Cartesian path."""
+        offsets = (dx, dy, dz)
+        if not all(math.isfinite(value) for value in offsets):
+            raise ValueError("tool-relative offsets must be finite")
+        if not math.isfinite(max_step) or max_step <= 0.0:
+            raise ValueError("max_step must be a positive finite number")
+        if not math.isfinite(jump_threshold) or jump_threshold < 0.0:
+            raise ValueError("jump_threshold must be a non-negative finite number")
+        if not 0.0 < minimum_fraction <= 1.0:
+            raise ValueError("minimum_fraction must be in (0, 1]")
+        if not self._wait_for_cartesian(execute=execute):
+            return False
+        joints = self.get_current_joint_positions()
+        current = self.get_current_pose()
+        if joints is None or current is None:
+            return False
+
+        orientation = current.pose.orientation
+        base_dx, base_dy, base_dz = self._rotate_vector_by_quaternion(
+            dx,
+            dy,
+            dz,
+            orientation.x,
+            orientation.y,
+            orientation.z,
+            orientation.w,
+        )
+        target = current.pose
+        target.position.x += base_dx
+        target.position.y += base_dy
+        target.position.z += base_dz
+        self.get_logger().info(
+            f"Cartesian tool translation: dx={dx:.6f}, dy={dy:.6f}, "
+            f"dz={dz:.6f} m -> {self.base_frame} translation: "
+            f"dx={base_dx:.6f}, dy={base_dy:.6f}, dz={base_dz:.6f} m"
+        )
+
+        request = GetCartesianPath.Request()
+        request.header.frame_id = self.base_frame
+        request.header.stamp = self.get_clock().now().to_msg()
+        request.start_state.joint_state.header = request.header
+        request.start_state.joint_state.name = list(UR_JOINT_NAMES)
+        request.start_state.joint_state.position = [
+            joints[name] for name in UR_JOINT_NAMES
+        ]
+        request.start_state.is_diff = False
+        request.group_name = self.group
+        request.link_name = self.ee_link
+        request.waypoints = [target]
+        request.max_step = max_step
+        request.jump_threshold = jump_threshold
+        request.prismatic_jump_threshold = 0.0
+        request.revolute_jump_threshold = self.max_joint_travel
+        request.avoid_collisions = True
+
+        mode = "PLAN FOR EXECUTION" if execute else "PLAN ONLY"
+        self.get_logger().warn(
+            f"{mode}: straight Cartesian path; max_step={max_step:.6f} m, "
+            f"jump_threshold={jump_threshold:.3f}"
+        )
+        future = self._cartesian_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+        response = future.result()
+        if response is None:
+            self.get_logger().error("No response received from /compute_cartesian_path.")
+            return False
+        code = response.error_code.val
+        if code != MoveItErrorCodes.SUCCESS:
+            self.get_logger().error(
+                f"Cartesian planning failed: {self._error_name(code)} ({code})"
+            )
+            return False
+        self.get_logger().info(
+            f"Cartesian path computed: fraction={response.fraction:.6f}, "
+            f"trajectory_points={len(response.solution.joint_trajectory.points)}"
+        )
+        if response.fraction < minimum_fraction:
+            self.get_logger().error(
+                "Cartesian path rejected: incomplete path. "
+                f"fraction={response.fraction:.6f}, required={minimum_fraction:.6f}"
+            )
+            return False
+
+        self._slow_cartesian_trajectory(response.solution)
+        if not self._inspect_robot_trajectory(
+            response.start_state, response.solution, execute
+        ):
+            return False
+        if not execute:
+            return True
+        if not self._execute_trajectory(response.solution):
+            return False
+        return self._verify_pose_goal(target)
+
+    def _wait_for_cartesian(self, *, execute: bool) -> bool:
+        self.get_logger().info("Waiting for MoveIt /compute_cartesian_path ...")
+        if not self._cartesian_client.wait_for_service(
+            timeout_sec=self.server_timeout
+        ):
+            self.get_logger().error(
+                "MoveIt /compute_cartesian_path service was not found."
+            )
+            return False
+        if execute and not self._execute_client.wait_for_server(
+            timeout_sec=self.server_timeout
+        ):
+            self.get_logger().error("MoveIt /execute_trajectory server was not found.")
+            return False
+        return True
+
+    def _slow_cartesian_trajectory(self, trajectory) -> None:
+        # Humble's Cartesian service time-parameterizes at scaling 1.0. Stretch
+        # time so both configured velocity and acceleration limits are respected.
+        speed_scale = min(
+            self.velocity_scaling, math.sqrt(self.acceleration_scaling)
+        )
+        for point in trajectory.joint_trajectory.points:
+            duration = point.time_from_start
+            nanoseconds = duration.sec * 1_000_000_000 + duration.nanosec
+            scaled_nanoseconds = int(round(nanoseconds / speed_scale))
+            duration.sec = scaled_nanoseconds // 1_000_000_000
+            duration.nanosec = scaled_nanoseconds % 1_000_000_000
+            point.velocities = [value * speed_scale for value in point.velocities]
+            point.accelerations = [
+                value * speed_scale**2 for value in point.accelerations
+            ]
+        self.get_logger().info(
+            f"Cartesian trajectory timing scaled by {speed_scale:.6f} "
+            f"(velocity_limit={self.velocity_scaling:.6f}, "
+            f"acceleration_limit={self.acceleration_scaling:.6f})"
+        )
+
     @staticmethod
     def _rotate_vector_by_quaternion(
         x: float,
@@ -450,8 +596,14 @@ class UR3MoveItController(Node):
         return result
 
     def _inspect_trajectory(self, result, execute: bool) -> bool:
-        trajectory = result.planned_trajectory
-        excursions = joint_excursions(result.trajectory_start, trajectory)
+        return self._inspect_robot_trajectory(
+            result.trajectory_start, result.planned_trajectory, execute
+        )
+
+    def _inspect_robot_trajectory(
+        self, trajectory_start, trajectory, execute: bool
+    ) -> bool:
+        excursions = joint_excursions(trajectory_start, trajectory)
         if not excursions:
             self.get_logger().error("Planned trajectory contains no joint points.")
             return False
