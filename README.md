@@ -311,6 +311,7 @@ move_to_joint(joint_positions, execute=False)
 move_to_pose(x, y, z, qx, qy, qz, qw, execute=False)
 move_relative_tool(dx, dy, dz, execute=False)
 move_cartesian_relative_tool(dx, dy, dz, execute=False)
+move_cartesian_to_pose(x, y, z, qx, qy, qz, qw, execute=False)
 ```
 
 기존 `ros2 run` 명령도 동일하게 유지되며, 내부적으로 이 클래스를 호출합니다.
@@ -395,3 +396,31 @@ ros2 run ur3_moveit_examples move_cartesian_tool \
 Humble의 Cartesian 서비스가 생성한 시간화 trajectory를 지정한 scaling 이하가 되도록
 더 느리게 조정하고, 검사한 동일 trajectory를 실행합니다. `fraction < 0.999`, 충돌,
 joint jump 또는 최대 관절 이동량 초과가 발생하면 실행하지 않습니다.
+
+## 접근·후퇴 시나리오
+
+`approach_retreat_demo`는 실행 시작 pose를 저장하고, 공구 Z축으로 Cartesian 직선 접근한
+뒤 같은 거리만큼 반대 방향으로 후퇴합니다. 빈 공간에서만 시험하세요. 기본값은 공구
+`+Z` 방향 5mm이며 Plan-only에서는 접근 경로만 계산합니다.
+
+```bash
+ros2 run ur3_moveit_examples approach_retreat_demo \
+  --distance 0.005
+```
+
+RViz에서 접근 방향과 직선 경로를 확인한 뒤 실제 시나리오를 실행합니다.
+
+```bash
+ros2 run ur3_moveit_examples approach_retreat_demo \
+  --distance 0.005 \
+  --execute \
+  --dwell-time 1.0 \
+  --max-step 0.001 \
+  --max-joint-travel 0.15 \
+  --velocity-scaling 0.05 \
+  --acceleration-scaling 0.05
+```
+
+접근이 성공한 경우에만 저장한 시작 TCP pose를 절대 Cartesian 목표로 삼아 후퇴하며,
+마지막에는 시작 pose와 최종 pose의 위치 및 자세 오차를 검사합니다. 반대 방향으로
+접근하려면 `--distance -0.005`를 사용합니다.

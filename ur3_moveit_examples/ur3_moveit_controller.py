@@ -292,17 +292,8 @@ class UR3MoveItController(Node):
         offsets = (dx, dy, dz)
         if not all(math.isfinite(value) for value in offsets):
             raise ValueError("tool-relative offsets must be finite")
-        if not math.isfinite(max_step) or max_step <= 0.0:
-            raise ValueError("max_step must be a positive finite number")
-        if not math.isfinite(jump_threshold) or jump_threshold < 0.0:
-            raise ValueError("jump_threshold must be a non-negative finite number")
-        if not 0.0 < minimum_fraction <= 1.0:
-            raise ValueError("minimum_fraction must be in (0, 1]")
-        if not self._wait_for_cartesian(execute=execute):
-            return False
-        joints = self.get_current_joint_positions()
         current = self.get_current_pose()
-        if joints is None or current is None:
+        if current is None:
             return False
 
         orientation = current.pose.orientation
@@ -324,6 +315,65 @@ class UR3MoveItController(Node):
             f"dz={dz:.6f} m -> {self.base_frame} translation: "
             f"dx={base_dx:.6f}, dy={base_dy:.6f}, dz={base_dz:.6f} m"
         )
+        return self.move_cartesian_to_pose(
+            target.position.x,
+            target.position.y,
+            target.position.z,
+            target.orientation.x,
+            target.orientation.y,
+            target.orientation.z,
+            target.orientation.w,
+            execute=execute,
+            max_step=max_step,
+            jump_threshold=jump_threshold,
+            minimum_fraction=minimum_fraction,
+        )
+
+    def move_cartesian_to_pose(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        qx: float,
+        qy: float,
+        qz: float,
+        qw: float,
+        *,
+        execute: bool = False,
+        max_step: float = 0.001,
+        jump_threshold: float = 2.0,
+        minimum_fraction: float = 0.999,
+    ) -> bool:
+        """Move in a straight Cartesian path to an absolute TCP pose."""
+        target = self._make_pose(x, y, z, qx, qy, qz, qw)
+        return self._move_cartesian_to_pose(
+            target,
+            execute=execute,
+            max_step=max_step,
+            jump_threshold=jump_threshold,
+            minimum_fraction=minimum_fraction,
+        )
+
+    def _move_cartesian_to_pose(
+        self,
+        target: Pose,
+        *,
+        execute: bool,
+        max_step: float,
+        jump_threshold: float,
+        minimum_fraction: float,
+    ) -> bool:
+        if not math.isfinite(max_step) or max_step <= 0.0:
+            raise ValueError("max_step must be a positive finite number")
+        if not math.isfinite(jump_threshold) or jump_threshold < 0.0:
+            raise ValueError("jump_threshold must be a non-negative finite number")
+        if not 0.0 < minimum_fraction <= 1.0:
+            raise ValueError("minimum_fraction must be in (0, 1]")
+        if not self._wait_for_cartesian(execute=execute):
+            return False
+        joints = self.get_current_joint_positions()
+        if joints is None:
+            return False
 
         request = GetCartesianPath.Request()
         request.header.frame_id = self.base_frame

@@ -19,6 +19,7 @@ setup(
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
+            "approach_retreat_demo = ur3_moveit_examples.approach_retreat_demo:main",
             "move_cartesian_tool = ur3_moveit_examples.move_cartesian_tool:main",
             "move_to_joint = ur3_moveit_examples.move_to_joint:main",
             "move_to_pose = ur3_moveit_examples.move_to_pose:main",
