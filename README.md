@@ -312,3 +312,27 @@ move_to_pose(x, y, z, qx, qy, qz, qw, execute=False)
 ```
 
 기존 `ros2 run` 명령도 동일하게 유지되며, 내부적으로 이 클래스를 호출합니다.
+
+## 연속 동작 예제
+
+`sequence_demo`는 실행 시작 시점의 TCP pose를 저장하고, `base_link`의 Z축 방향으로
+10mm 상승한 뒤 원래 pose로 복귀합니다. 먼저 상승 경로만 Plan-only로 확인합니다.
+
+```bash
+ros2 run ur3_moveit_examples sequence_demo
+```
+
+Plan-only가 성공하고 RViz에서 경로를 확인한 뒤 실제 연속 동작을 실행합니다.
+
+```bash
+ros2 run ur3_moveit_examples sequence_demo \
+  --execute \
+  --lift-distance 0.01 \
+  --max-joint-travel 0.15 \
+  --velocity-scaling 0.05 \
+  --acceleration-scaling 0.05
+```
+
+각 단계는 별도로 IK, collision-aware planning, trajectory 이동량 검사, 실행 및 TCP 도달
+검증을 수행합니다. 상승 단계가 실패하면 복귀 명령은 실행하지 않습니다. Plan-only에서는
+로봇의 실제 상태가 변하지 않으므로 복귀 단계는 생략합니다.

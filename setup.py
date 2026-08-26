@@ -22,6 +22,7 @@ setup(
             "move_to_joint = ur3_moveit_examples.move_to_joint:main",
             "move_to_pose = ur3_moveit_examples.move_to_pose:main",
             "robot_state = ur3_moveit_examples.robot_state:main",
+            "sequence_demo = ur3_moveit_examples.sequence_demo:main",
         ],
     },
 )
