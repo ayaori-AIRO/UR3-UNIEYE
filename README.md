@@ -309,6 +309,7 @@ get_current_joint_positions()
 get_current_pose()
 move_to_joint(joint_positions, execute=False)
 move_to_pose(x, y, z, qx, qy, qz, qw, execute=False)
+move_relative_tool(dx, dy, dz, execute=False)
 ```
 
 기존 `ros2 run` 명령도 동일하게 유지되며, 내부적으로 이 클래스를 호출합니다.
@@ -336,3 +337,30 @@ ros2 run ur3_moveit_examples sequence_demo \
 각 단계는 별도로 IK, collision-aware planning, trajectory 이동량 검사, 실행 및 TCP 도달
 검증을 수행합니다. 상승 단계가 실패하면 복귀 명령은 실행하지 않습니다. Plan-only에서는
 로봇의 실제 상태가 변하지 않으므로 복귀 단계는 생략합니다.
+
+## 공구 좌표계 기준 상대 이동
+
+`move_relative_tool`은 현재 `tool0` 좌표계에서 지정한 거리만큼 TCP를 평행 이동합니다.
+단위는 metre이며 현재 TCP orientation은 유지됩니다. 예를 들어 다음 명령은 공구의
+`+Z`축 방향으로 5mm 이동하는 경로만 계획합니다.
+
+```bash
+ros2 run ur3_moveit_examples move_relative_tool 0 0 0.005
+```
+
+로그에 공구 좌표계 이동량과 `base_link`로 변환된 이동량이 모두 출력됩니다. RViz에서
+방향과 경로를 확인한 뒤 실행합니다.
+
+```bash
+ros2 run ur3_moveit_examples move_relative_tool \
+  0 0 0.005 \
+  --execute \
+  --max-joint-travel 0.15 \
+  --velocity-scaling 0.05 \
+  --acceleration-scaling 0.05
+```
+
+반대 방향은 `dz`에 음수를 입력합니다. 실제 장착 공구의 접근 방향이 `tool0`의 `+Z`인지
+`-Z`인지는 Plan-only 경로와 TF 축을 통해 반드시 먼저 확인해야 합니다. 이 명령은 목표
+pose까지 MoveIt 일반 planning을 수행하며 TCP가 직선을 따라간다는 보장은 없습니다.
+5mm 시험의 기본 위치 검증 허용오차는 3mm입니다.

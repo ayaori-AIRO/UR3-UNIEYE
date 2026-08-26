@@ -228,6 +228,80 @@ class UR3MoveItController(Node):
             return False
         return self._verify_pose_goal(target)
 
+    def move_relative_tool(
+        self, dx: float, dy: float, dz: float, *, execute: bool = False
+    ) -> bool:
+        """Move by a translation expressed in the current tool frame.
+
+        The current TCP orientation is preserved. Planning and execution use the
+        same collision-aware IK and trajectory safety checks as move_to_pose().
+        """
+        offsets = (dx, dy, dz)
+        if not all(math.isfinite(value) for value in offsets):
+            raise ValueError("tool-relative offsets must be finite")
+
+        current = self.get_current_pose()
+        if current is None:
+            return False
+        orientation = current.pose.orientation
+        base_dx, base_dy, base_dz = self._rotate_vector_by_quaternion(
+            dx,
+            dy,
+            dz,
+            orientation.x,
+            orientation.y,
+            orientation.z,
+            orientation.w,
+        )
+        target = current.pose
+        target.position.x += base_dx
+        target.position.y += base_dy
+        target.position.z += base_dz
+
+        self.get_logger().info(
+            f"Tool-relative translation: dx={dx:.6f}, dy={dy:.6f}, "
+            f"dz={dz:.6f} m -> {self.base_frame} translation: "
+            f"dx={base_dx:.6f}, dy={base_dy:.6f}, dz={base_dz:.6f} m"
+        )
+        return self.move_to_pose(
+            target.position.x,
+            target.position.y,
+            target.position.z,
+            target.orientation.x,
+            target.orientation.y,
+            target.orientation.z,
+            target.orientation.w,
+            execute=execute,
+        )
+
+    @staticmethod
+    def _rotate_vector_by_quaternion(
+        x: float,
+        y: float,
+        z: float,
+        qx: float,
+        qy: float,
+        qz: float,
+        qw: float,
+    ) -> tuple[float, float, float]:
+        norm = math.sqrt(qx**2 + qy**2 + qz**2 + qw**2)
+        if norm < 1.0e-9:
+            raise ValueError("current TCP quaternion norm must be non-zero")
+        qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
+
+        # Unit-quaternion rotation matrix, mapping tool-frame vectors to base.
+        return (
+            (1.0 - 2.0 * (qy * qy + qz * qz)) * x
+            + 2.0 * (qx * qy - qz * qw) * y
+            + 2.0 * (qx * qz + qy * qw) * z,
+            2.0 * (qx * qy + qz * qw) * x
+            + (1.0 - 2.0 * (qx * qx + qz * qz)) * y
+            + 2.0 * (qy * qz - qx * qw) * z,
+            2.0 * (qx * qz - qy * qw) * x
+            + 2.0 * (qy * qz + qx * qw) * y
+            + (1.0 - 2.0 * (qx * qx + qy * qy)) * z,
+        )
+
     def _wait_for_moveit(self, *, execute: bool, needs_ik: bool) -> bool:
         self.get_logger().info("Waiting for MoveIt /move_action ...")
         if not self._move_client.wait_for_server(timeout_sec=self.server_timeout):
