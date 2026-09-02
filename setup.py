@@ -20,12 +20,19 @@ setup(
     entry_points={
         "console_scripts": [
             "approach_retreat_demo = ur3_moveit_examples.approach_retreat_demo:main",
+            "arm_sweep_demo = ur3_moveit_examples.arm_sweep_demo:main",
             "move_cartesian_tool = ur3_moveit_examples.move_cartesian_tool:main",
             "move_to_joint = ur3_moveit_examples.move_to_joint:main",
             "move_to_pose = ur3_moveit_examples.move_to_pose:main",
             "move_relative_tool = ur3_moveit_examples.move_relative_tool:main",
+            "pick_and_place_fk_demo = ur3_moveit_examples.pick_and_place_fk_demo:main",
             "robot_state = ur3_moveit_examples.robot_state:main",
             "sequence_demo = ur3_moveit_examples.sequence_demo:main",
+            "three_move_demo = ur3_moveit_examples.three_move_demo:main",
+            "weiss_gripper_read_state = ur3_moveit_examples.weiss_gripper_read_state:main",
+            "weiss_gripper_reference = ur3_moveit_examples.weiss_gripper_reference:main",
+            "weiss_gripper_release = ur3_moveit_examples.weiss_gripper_release:main",
+            "weiss_gripper_grip = ur3_moveit_examples.weiss_gripper_grip:main",
         ],
     },
 )

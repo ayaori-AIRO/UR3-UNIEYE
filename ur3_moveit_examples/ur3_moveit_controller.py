@@ -143,6 +143,21 @@ class UR3MoveItController(Node):
             return None
         return dict(self._joint_positions)
 
+    def _get_fresh_joint_positions(
+        self, timeout: float | None = None
+    ) -> dict[str, float] | None:
+        """Wait for a joint-state message newer than the currently cached one."""
+        sequence = self._joint_state_sequence
+        deadline = time.monotonic() + (timeout or self.server_timeout)
+        while self._joint_state_sequence <= sequence and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        if self._joint_state_sequence <= sequence or self._joint_positions is None:
+            self.get_logger().error(
+                "No fresh complete UR3 joint state received on /joint_states."
+            )
+            return None
+        return dict(self._joint_positions)
+
     def get_current_pose(self, timeout: float | None = None) -> PoseStamped | None:
         deadline = time.monotonic() + (timeout or self.server_timeout)
         last_error = "transform has not been received"
@@ -174,6 +189,8 @@ class UR3MoveItController(Node):
             raise ValueError("joint_positions must contain exactly 6 values")
         if not all(math.isfinite(value) for value in joint_positions):
             raise ValueError("joint_positions must contain finite values")
+        if self._get_fresh_joint_positions() is None:
+            return False
         if not self._wait_for_moveit(execute=execute, needs_ik=False):
             return False
 
@@ -185,10 +202,22 @@ class UR3MoveItController(Node):
             )
 
         result = self._plan_joint_goal(joint_positions, self.joint_goal_tolerance)
-        if result is None or not self._inspect_trajectory(result, execute):
+        if result is None:
+            return False
+        if not self._validate_planned_joint_goal(
+            result, joint_positions, self.joint_goal_tolerance
+        ):
+            return False
+        if not self._inspect_trajectory(result, execute):
             return False
         if not execute:
             return True
+        if trajectory_duration_seconds(result.planned_trajectory) <= 1.0e-9:
+            self.get_logger().info(
+                "Execution skipped: the robot is already at the requested "
+                "joint target and the planned trajectory has zero duration."
+            )
+            return self._verify_joint_goal(joint_positions)
         if not self._execute_trajectory(result.planned_trajectory):
             return False
         return self._verify_joint_goal(joint_positions)
@@ -223,7 +252,13 @@ class UR3MoveItController(Node):
             f"{target.orientation.w:.5f})"
         )
         result = self._plan_joint_goal(ik_positions, self.ik_joint_tolerance)
-        if result is None or not self._inspect_trajectory(result, execute):
+        if result is None:
+            return False
+        if not self._validate_planned_joint_goal(
+            result, ik_positions, self.ik_joint_tolerance
+        ):
+            return False
+        if not self._inspect_trajectory(result, execute):
             return False
         if not execute:
             return True
@@ -346,17 +381,49 @@ class UR3MoveItController(Node):
     ) -> bool:
         """Move in a straight Cartesian path to an absolute TCP pose."""
         target = self._make_pose(x, y, z, qx, qy, qz, qw)
-        return self._move_cartesian_to_pose(
-            target,
+        return self._move_cartesian_waypoints(
+            [target],
             execute=execute,
             max_step=max_step,
             jump_threshold=jump_threshold,
             minimum_fraction=minimum_fraction,
         )
 
-    def _move_cartesian_to_pose(
+    def move_cartesian_waypoints(
         self,
-        target: Pose,
+        waypoints: list[Pose],
+        *,
+        execute: bool = False,
+        max_step: float = 0.001,
+        jump_threshold: float = 2.0,
+        minimum_fraction: float = 0.999,
+    ) -> bool:
+        """Follow one or more absolute TCP waypoints with straight segments."""
+        if not waypoints:
+            raise ValueError("waypoints must contain at least one pose")
+        normalized = [
+            self._make_pose(
+                pose.position.x,
+                pose.position.y,
+                pose.position.z,
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            )
+            for pose in waypoints
+        ]
+        return self._move_cartesian_waypoints(
+            normalized,
+            execute=execute,
+            max_step=max_step,
+            jump_threshold=jump_threshold,
+            minimum_fraction=minimum_fraction,
+        )
+
+    def _move_cartesian_waypoints(
+        self,
+        waypoints: list[Pose],
         *,
         execute: bool,
         max_step: float,
@@ -386,7 +453,7 @@ class UR3MoveItController(Node):
         request.start_state.is_diff = False
         request.group_name = self.group
         request.link_name = self.ee_link
-        request.waypoints = [target]
+        request.waypoints = waypoints
         request.max_step = max_step
         request.jump_threshold = jump_threshold
         request.prismatic_jump_threshold = 0.0
@@ -395,8 +462,8 @@ class UR3MoveItController(Node):
 
         mode = "PLAN FOR EXECUTION" if execute else "PLAN ONLY"
         self.get_logger().warn(
-            f"{mode}: straight Cartesian path; max_step={max_step:.6f} m, "
-            f"jump_threshold={jump_threshold:.3f}"
+            f"{mode}: Cartesian path through {len(waypoints)} waypoint(s); "
+            f"max_step={max_step:.6f} m, jump_threshold={jump_threshold:.3f}"
         )
         future = self._cartesian_client.call_async(request)
         rclpy.spin_until_future_complete(self, future)
@@ -430,7 +497,7 @@ class UR3MoveItController(Node):
             return True
         if not self._execute_trajectory(response.solution):
             return False
-        return self._verify_pose_goal(target)
+        return self._verify_pose_goal(waypoints[-1])
 
     def _wait_for_cartesian(self, *, execute: bool) -> bool:
         self.get_logger().info("Waiting for MoveIt /compute_cartesian_path ...")
@@ -611,7 +678,12 @@ class UR3MoveItController(Node):
         request.allowed_planning_time = self.planning_time
         request.max_velocity_scaling_factor = self.velocity_scaling
         request.max_acceleration_scaling_factor = self.acceleration_scaling
-        request.start_state.is_diff = True
+        request.start_state.joint_state.header.stamp = self.get_clock().now().to_msg()
+        request.start_state.joint_state.name = list(UR_JOINT_NAMES)
+        request.start_state.joint_state.position = [
+            self._joint_positions[name] for name in UR_JOINT_NAMES
+        ]
+        request.start_state.is_diff = False
         request.goal_constraints = [constraints]
         goal.planning_options.plan_only = True
         goal.planning_options.look_around = False
@@ -645,6 +717,75 @@ class UR3MoveItController(Node):
         )
         return result
 
+    def _validate_planned_joint_goal(
+        self, result, targets: list[float], goal_tolerance: float
+    ) -> bool:
+        """Reject a plan whose start or final joints differ from the request."""
+        trajectory = result.planned_trajectory.joint_trajectory
+        if not trajectory.joint_names or not trajectory.points:
+            self.get_logger().error(
+                "Planned joint-goal validation failed: trajectory is empty."
+            )
+            return False
+
+        planned_start = dict(
+            zip(
+                result.trajectory_start.joint_state.name,
+                result.trajectory_start.joint_state.position,
+            )
+        )
+        planned_final = dict(
+            zip(trajectory.joint_names, trajectory.points[-1].positions)
+        )
+        if not all(
+            name in planned_start and name in planned_final
+            for name in UR_JOINT_NAMES
+        ):
+            self.get_logger().error(
+                "Planned joint-goal validation failed: missing UR3 joint data."
+            )
+            return False
+
+        start_errors = {
+            name: abs(planned_start[name] - self._joint_positions[name])
+            for name in UR_JOINT_NAMES
+        }
+        final_errors = {
+            name: abs(planned_final[name] - target)
+            for name, target in zip(UR_JOINT_NAMES, targets)
+        }
+        start_name = max(start_errors, key=start_errors.get)
+        final_name = max(final_errors, key=final_errors.get)
+        start_error = start_errors[start_name]
+        final_error = final_errors[final_name]
+        if start_error > self.verify_joint_tolerance:
+            self.get_logger().error(
+                "Planning blocked: MoveIt trajectory start differs from the latest "
+                f"joint state. maximum_error={start_error:.6f} rad, "
+                f"tolerance={self.verify_joint_tolerance:.6f} rad, "
+                f"joint={start_name}"
+            )
+            return False
+        if final_error > goal_tolerance + 1.0e-6:
+            self.get_logger().error(
+                "Planning blocked: trajectory final point does not match the "
+                f"requested joint target. maximum_error={final_error:.6f} rad, "
+                f"tolerance={goal_tolerance:.6f} rad, joint={final_name}"
+            )
+            for name, target in zip(UR_JOINT_NAMES, targets):
+                self.get_logger().error(
+                    f"  {name}: target={target:.6f}, "
+                    f"planned_final={planned_final[name]:.6f}, "
+                    f"error={final_errors[name]:.6f} rad"
+                )
+            return False
+        self.get_logger().info(
+            "Planned joint-goal validation succeeded: "
+            f"start_error={start_error:.6f} rad, "
+            f"final_error={final_error:.6f} rad"
+        )
+        return True
+
     def _inspect_trajectory(self, result, execute: bool) -> bool:
         return self._inspect_robot_trajectory(
             result.trajectory_start, result.planned_trajectory, execute
@@ -666,9 +807,9 @@ class UR3MoveItController(Node):
         )
         for name, travel in excursions.items():
             self.get_logger().info(f"  {name}: maximum_travel={travel:.6f} rad")
-        if execute and maximum > self.max_joint_travel:
+        if maximum > self.max_joint_travel:
             self.get_logger().error(
-                "Execution blocked: planned joint travel exceeds the configured "
+                "Planning blocked: planned joint travel exceeds the configured "
                 f"limit. maximum={maximum:.6f} rad, limit="
                 f"{self.max_joint_travel:.6f} rad, joint={maximum_name}"
             )

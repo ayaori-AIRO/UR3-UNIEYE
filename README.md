@@ -424,3 +424,240 @@ ros2 run ur3_moveit_examples approach_retreat_demo \
 접근이 성공한 경우에만 저장한 시작 TCP pose를 절대 Cartesian 목표로 삼아 후퇴하며,
 마지막에는 시작 pose와 최종 pose의 위치 및 자세 오차를 검사합니다. 반대 방향으로
 접근하려면 `--distance -0.005`를 사용합니다.
+
+## 발표용 3단계 관절 이동
+
+`three_move_demo`는 현재 joint 자세를 저장하고 선택한 관절을 시작값 기준 `+offset`,
+`-offset`, 시작값 순서로 이동합니다. 기본 관절은 `shoulder_pan_joint`, offset은
+`0.05rad`(약 2.86도)입니다. 기본 Plan-only에서는 첫 번째 목표만 계획합니다.
+
+```bash
+ros2 run ur3_moveit_examples three_move_demo \
+  --joint shoulder_pan_joint \
+  --offset 0.05 \
+  --max-joint-travel 0.15
+```
+
+RViz에서 첫 번째 경로와 주변 작업 공간을 확인하고, scaled trajectory controller가
+active인지 확인한 뒤 세 동작을 실행합니다.
+
+```bash
+ros2 run ur3_moveit_examples three_move_demo \
+  --joint shoulder_pan_joint \
+  --offset 0.05 \
+  --execute \
+  --dwell-time 0.5 \
+  --max-joint-travel 0.15 \
+  --velocity-scaling 0.05 \
+  --acceleration-scaling 0.05
+```
+
+두 번째 동작은 `+offset`에서 `-offset`까지 이동하므로 이동량이 offset의 두 배입니다.
+따라서 `2 * offset <= max_joint_travel` 조건을 만족하지 않으면 시작 전에 오류로
+차단합니다. 각 단계는 별도로 MoveIt 계획, trajectory 검사, 실행 및 joint 도달 검증을
+수행하며 실패하면 다음 단계로 진행하지 않습니다.
+
+## 발표용 전체 팔 협조 이동
+
+`arm_sweep_demo`는 `shoulder_lift_joint`, `elbow_joint`, `wrist_1_joint`을 동시에 조금씩
+변경하여 자세 A, 반대 방향의 자세 B, 저장한 시작 자세 순서로 이동합니다. 관절 범위
+끝에 가까운 `shoulder_pan_joint`는 변경하지 않습니다. 먼저 자세 A만 Plan-only로
+확인합니다.
+
+```bash
+ros2 run ur3_moveit_examples arm_sweep_demo \
+  --motion-scale 1.0 \
+  --max-joint-travel 0.15 \
+  --velocity-scaling 0.05 \
+  --acceleration-scaling 0.05
+```
+
+RViz와 로그에서 경로, 충돌 여부, 계획 시작·종료점 검증, 최대 관절 이동량을 확인한 뒤
+실행합니다.
+
+```bash
+ros2 run ur3_moveit_examples arm_sweep_demo \
+  --motion-scale 1.0 \
+  --execute \
+  --dwell-time 0.7 \
+  --max-joint-travel 0.15 \
+  --velocity-scaling 0.05 \
+  --acceleration-scaling 0.05
+```
+
+기본 자세 A 변화량은 shoulder lift `+0.04rad`, elbow `-0.06rad`, wrist 1
+`+0.02rad`이며 자세 B는 반대 부호입니다. A에서 B까지 elbow 이동량은 `0.12rad`입니다.
+`--motion-scale`을 높이면 동작이 커지지만 A-B 최대 이동량이 안전 제한을 넘으면 시작
+전에 차단합니다.
+
+## 관절 티칭 기반 Pick & Place
+
+`pick_and_place_fk_demo`는 카메라 없이 미리 티칭한 관절 위치를 사용하는 Pick & Place
+프로그램입니다. 현재 첫 단계로 실제 UR3에서 측정한 `HOME_JOINTS`만 등록되어 있습니다.
+Pick과 Place 관절 위치는 아직 등록하지 않았으므로 실행되지 않습니다.
+
+먼저 홈 이동을 Plan-only로 검사합니다.
+
+```bash
+ros2 run ur3_moveit_examples pick_and_place_fk_demo \
+  --max-joint-travel 0.30 \
+  --velocity-scaling 0.03 \
+  --acceleration-scaling 0.03
+```
+
+RViz에서 계획 경로와 로그의 시작점·최종점·최대 관절 이동량을 확인한 후 실제 홈 이동을
+실행합니다.
+
+```bash
+ros2 run ur3_moveit_examples pick_and_place_fk_demo \
+  --execute \
+  --max-joint-travel 0.30 \
+  --velocity-scaling 0.03 \
+  --acceleration-scaling 0.03
+```
+
+현재 자세에서 홈까지 어느 한 관절이라도 `--max-joint-travel`을 초과하면 실행이
+차단됩니다. 제한값은 계획 결과를 확인하지 않고 임의로 높이지 마세요.
+
+## WEISS IEG 55-020 읽기 전용 통신 시험
+
+`weiss_gripper_read_state`는 UR3 컨트롤러에서 실행 중인 GRIPKIT XML-RPC daemon에
+접속하여 `GetState`와 `GetPos`만 호출합니다. `Reference`, `Release`, `Grip`은 호출하지
+않으므로 이 단계에서는 그리퍼의 의도적인 움직임이 없어야 합니다.
+
+```bash
+ros2 run ur3_moveit_examples weiss_gripper_read_state
+```
+
+현재 기본 연결 정보는 다음과 같습니다.
+
+```text
+URL:       http://192.168.1.11:44221/RPC2
+device ID: IEG 55-020 SN:000234
+timeout:   3.0 s
+```
+
+주소나 장치가 변경된 경우에만 옵션으로 덮어씁니다.
+
+```bash
+ros2 run ur3_moveit_examples weiss_gripper_read_state \
+  --url http://192.168.1.11:44221/RPC2 \
+  --device-id "IEG 55-020 SN:000234" \
+  --timeout 3.0
+```
+
+프로그램은 각 응답의 Python 타입, `repr`, 문자열 표현을 출력합니다. 이 실제 반환값을
+확인하기 전에는 상태 코드 의미를 가정하거나 동작 명령을 실행하지 않습니다.
+
+확보한 GRIPKIT 1.2.0 URScript에서 확인된 상태값은 다음과 같습니다.
+
+```text
+-1 = COMMUNICATION_FAULT
+ 0 = NOT_REFERENCED
+ 1 = IDLE
+ 2 = RELEASED
+ 4 = NO_PART
+ 8 = HOLDING
+```
+
+### Reference 시험
+
+기본 실행은 현재 상태만 확인하며 그리퍼를 움직이지 않습니다.
+
+```bash
+ros2 run ur3_moveit_examples weiss_gripper_reference
+```
+
+출력에서 `NOT_REFERENCED`를 확인하고 그리퍼 핑거 주변을 완전히 비운 뒤에만 Reference를
+실행합니다. Reference 과정에서 그리퍼가 움직일 수 있습니다.
+
+```bash
+ros2 run ur3_moveit_examples weiss_gripper_reference \
+  --execute \
+  --operation-timeout 15.0
+```
+
+프로그램은 `Reference`를 한 번만 호출하고 `GetState`와 `GetPos`를 polling합니다. 이미
+참조된 상태라면 다시 Reference하지 않으며, 통신 장애 또는 timeout 발생 시 실패로
+종료합니다.
+
+### Release 시험
+
+Reference 완료 후 기본 실행으로 현재 상태만 확인합니다.
+
+```bash
+ros2 run ur3_moveit_examples weiss_gripper_release
+```
+
+핑거가 열리는 전체 공간을 비운 후 Grip Configuration 1(index 0)의 Release를 실행합니다.
+
+```bash
+ros2 run ur3_moveit_examples weiss_gripper_release \
+  --execute \
+  --index 0 \
+  --operation-timeout 10.0
+```
+
+프로그램은 `Release`를 한 번만 호출하고 상태가 `RELEASED(2)`가 될 때까지 polling합니다.
+`NOT_REFERENCED(0)`, `COMMUNICATION_FAULT(-1)` 또는 timeout은 실패로 처리하며, 이미
+`RELEASED` 상태이면 동작 명령을 다시 보내지 않습니다.
+
+### Grip 빈 공간 시험
+
+첫 Grip 시험은 핑거 사이를 완전히 비우고 `RELEASED(2)`에서 시작합니다. 기본 기대
+결과는 `NO_PART(4)`입니다.
+
+```bash
+ros2 run ur3_moveit_examples weiss_gripper_grip
+```
+
+상태 확인 후 실제로 핑거를 닫습니다.
+
+```bash
+ros2 run ur3_moveit_examples weiss_gripper_grip \
+  --execute \
+  --index 0 \
+  --expect no-part \
+  --operation-timeout 10.0
+```
+
+프로그램은 시작 상태가 `RELEASED(2)`가 아니면 Grip을 차단합니다. `Grip`을 한 번만
+호출하고 `NO_PART(4)` 또는 `HOLDING(8)`까지 polling하며, 실제 결과가 `--expect`와
+다르면 실패로 종료합니다. 물체를 사용한 시험은 빈 공간 시험이 완료된 이후
+`--expect holding`으로 별도 수행합니다.
+
+### 통신 구조와 실제 검증 결과
+
+그리퍼는 ROS2 PC의 USB에 직접 연결되어 있지 않습니다. Python 프로그램이 LAN으로 UR3
+컨트롤러 내부의 WEISS GRIPKIT daemon에 XML-RPC 요청을 보내며, daemon이 USB와
+DC-IOLINK를 거쳐 IEG 55-020을 제어합니다.
+
+```text
+ROS2 PC (192.168.1.12)
+  └─ Ethernet / XML-RPC
+       └─ UR3 Controller (192.168.1.11:44221)
+            └─ WEISS GRIPKIT daemon
+                 └─ USB
+                      └─ DC-IOLINK
+                           └─ IO-Link
+                                └─ IEG 55-020 SN:000234
+```
+
+현재 그리퍼 시험 프로그램은 `ros2 run`으로 실행되지만 실제 장치 통신에는 ROS2
+Topic/Service가 아닌 Python 표준 `xmlrpc.client`를 사용합니다. 추후 검증된 XML-RPC
+클라이언트를 ROS2 Service와 상태 Topic으로 감쌀 예정입니다.
+
+실제 장비에서 다음 결과를 확인했습니다.
+
+| 시험 | 상태 변화 | 위치 변화 | 결과 |
+|---|---|---|---|
+| 읽기 | `NOT_REFERENCED(0)` | `-1.9mm` | `GetState=int`, `GetPos=float` |
+| Reference | `0 → IDLE(1)` | `-1.9 → 5.7 → 21.1mm` | 성공 |
+| Release | `1 → RELEASED(2)` | `21.1 → 20.0mm` | 성공 |
+| 빈 Grip | `2 → NO_PART(4)` | `20.0 → 1.0mm` | 예상 결과로 성공 |
+| 물체 Grip | `2 → NO_PART(4)` | `20.0 → 1.0mm` | `HOLDING(8)` 미검출 |
+
+물체 Grip 시험 및 티치펜던트 Grip에서 한쪽 핑거만 움직이는 현상이 확인되었습니다.
+이는 ROS2/XML-RPC와 무관한 기계적 간섭, 핑거 체결 또는 그리퍼 내부 기구 문제일 수
+있으므로 원인을 점검하기 전까지 물체 파지 및 로봇팔과의 통합 실행을 중단합니다.
+Force 증가나 No Part Limit 변경으로 우회하지 않습니다.
