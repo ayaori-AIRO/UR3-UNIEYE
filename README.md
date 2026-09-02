@@ -493,8 +493,8 @@ ros2 run ur3_moveit_examples arm_sweep_demo \
 ## 관절 티칭 기반 Pick & Place
 
 `pick_and_place_fk_demo`는 카메라 없이 미리 티칭한 관절 위치를 사용하는 Pick & Place
-프로그램입니다. 현재 첫 단계로 실제 UR3에서 측정한 `HOME_JOINTS`만 등록되어 있습니다.
-Pick과 Place 관절 위치는 아직 등록하지 않았으므로 실행되지 않습니다.
+개발 과정의 홈 이동 전용 프로그램입니다. 실제 전체 시나리오는 아래의
+`fk_pick_and_place_demo`가 담당하며, 이 명령은 `HOME_JOINTS` 이동만 실행합니다.
 
 먼저 홈 이동을 Plan-only로 검사합니다.
 
@@ -661,3 +661,76 @@ Topic/Service가 아닌 Python 표준 `xmlrpc.client`를 사용합니다. 추후
 이는 ROS2/XML-RPC와 무관한 기계적 간섭, 핑거 체결 또는 그리퍼 내부 기구 문제일 수
 있으므로 원인을 점검하기 전까지 물체 파지 및 로봇팔과의 통합 실행을 중단합니다.
 Force 증가나 No Part Limit 변경으로 우회하지 않습니다.
+
+## 고정 관절점 Pick & Place 시나리오
+
+`fk_pick_and_place_demo`는 실제 UR3에서 티칭한 세 관절 자세를 사용합니다. 명칭에 FK가
+들어가지만 FK로 경로를 생성하는 것은 아닙니다. Joint 목표는 `move_to_joint()`로
+MoveIt에 전달하며, 기록된 TCP pose는 각 관절 자세의 FK 결과입니다.
+
+```text
+Point 1 이동
+→ WEISS Grip
+→ HOLDING(8) 확인
+→ Point 2 이동
+→ HOLDING(8) 재확인
+→ WEISS Release
+→ RELEASED(2) 확인
+→ Home 이동
+```
+
+티칭된 TCP 기준값은 다음과 같습니다.
+
+| 지점 | x [m] | y [m] | z [m] |
+|---|---:|---:|---:|
+| Home | 0.003823 | 0.115193 | 0.510116 |
+| Point 1 | -0.347673 | 0.003441 | 0.043215 |
+| Point 2 | -0.069039 | -0.370382 | 0.047135 |
+
+먼저 Point 1까지만 Plan-only로 검사합니다. 이 명령은 그리퍼를 움직이지 않으며 Point 2와
+Home도 실행하지 않습니다.
+
+```bash
+ros2 run ur3_moveit_examples fk_pick_and_place_demo \
+  --max-joint-travel 2.10 \
+  --velocity-scaling 0.03 \
+  --acceleration-scaling 0.03
+```
+
+세 티칭 구간의 최대 단일 관절 차이는 약 `1.897rad`이므로 시나리오의 기본
+`--max-joint-travel`은 `2.10rad`입니다. 각 단계에서 MoveIt이 만든 실제 trajectory가
+이 값을 넘으면 실행을 차단합니다.
+
+기계 및 충돌 안전 점검을 모두 마친 이후의 전체 실행 명령은 다음과 같습니다.
+
+```bash
+ros2 run ur3_moveit_examples fk_pick_and_place_demo \
+  --execute \
+  --grip-index 0 \
+  --dwell-time 0.5 \
+  --max-joint-travel 2.10 \
+  --velocity-scaling 0.03 \
+  --acceleration-scaling 0.03
+```
+
+현재는 한쪽 핑거가 Grip 중 움직이지 않는 기계 문제가 미해결이며 MoveIt 로봇 모델에
+그리퍼와 작업대 충돌 형상도 아직 없습니다. 특히 Point 1과 Point 2의 TCP 높이는 약
+`43~47mm`이므로 두 문제를 해결하기 전에는 `--execute`를 사용하지 마세요. 실행 중
+`NO_PART`, 파지 손실, MoveIt 계획/실행 실패 또는 XML-RPC 오류가 발생하면 다음 단계로
+진행하지 않습니다.
+
+물체 없이 동작 순서만 시연할 때는 명시적으로 `--allow-empty-grip`을 추가합니다. 이
+모드에서는 Point 1의 `NO_PART(4)`를 정상 결과로 받아들이고, 닫힌 빈 그리퍼로 Point 2에
+이동한 뒤 Release하고 Home으로 복귀합니다. 실제 물체를 집는 작업에는 이 옵션을 사용하지
+마세요.
+
+```bash
+ros2 run ur3_moveit_examples fk_pick_and_place_demo \
+  --execute \
+  --allow-empty-grip \
+  --grip-index 0 \
+  --dwell-time 0.5 \
+  --max-joint-travel 2.10 \
+  --velocity-scaling 0.03 \
+  --acceleration-scaling 0.03
+```

@@ -11,17 +11,7 @@ from ur3_moveit_examples.ur3_moveit_controller import (
     UR3MoveItController,
     UR_JOINT_NAMES,
 )
-
-
-# Taught from the real UR3 on 2026-09-02. Values are in UR_JOINT_NAMES order.
-HOME_JOINTS = (
-    -0.111087,  # shoulder_pan_joint
-    -0.517589,  # shoulder_lift_joint
-    -1.780449,  # elbow_joint
-    -0.826582,  # wrist_1_joint
-    1.523745,   # wrist_2_joint
-    -0.022781,  # wrist_3_joint
-)
+from ur3_moveit_examples.pick_and_place_points import HOME_JOINTS
 
 
 def positive(value: str) -> float:
