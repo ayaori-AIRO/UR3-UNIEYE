@@ -22,6 +22,7 @@ setup(
             "approach_retreat_demo = ur3_moveit_examples.approach_retreat_demo:main",
             "arm_sweep_demo = ur3_moveit_examples.arm_sweep_demo:main",
             "fk_pick_and_place_demo = ur3_moveit_examples.fk_pick_and_place_demo:main",
+            "ik_pick_and_place_demo = ur3_moveit_examples.ik_pick_and_place_demo:main",
             "move_cartesian_tool = ur3_moveit_examples.move_cartesian_tool:main",
             "move_to_joint = ur3_moveit_examples.move_to_joint:main",
             "move_to_pose = ur3_moveit_examples.move_to_pose:main",

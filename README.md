@@ -734,3 +734,44 @@ ros2 run ur3_moveit_examples fk_pick_and_place_demo \
   --velocity-scaling 0.03 \
   --acceleration-scaling 0.03
 ```
+
+## TCP Pose/IK 기반 Pick & Place
+
+`ik_pick_and_place_demo`는 Point 1과 Point 2의 저장된 TCP pose를 목표로 사용합니다. 먼
+이동에서는 현재 관절 상태를 seed로 collision-aware IK를 구한 뒤 MoveIt으로 계획하고,
+각 작업점 위 `base_link +Z` 접근점에서 실제 작업점까지는 Cartesian 직선으로 하강·상승합니다.
+마지막 Home 복귀만 재현성이 높은 티칭 관절값을 사용합니다.
+
+```text
+Point 1 접근점(IK) → Point 1(Cartesian) → Grip
+→ Point 1 접근점(Cartesian) → Point 2 접근점(IK)
+→ Point 2(Cartesian) → Release → Point 2 접근점(Cartesian)
+→ Home(티칭 관절값)
+```
+
+먼저 HOME에서 Point 1 접근점까지 Plan-only로 검사합니다. 기본 접근 높이는 50 mm입니다.
+
+```bash
+ros2 run ur3_moveit_examples ik_pick_and_place_demo \
+  --approach-height 0.05 \
+  --max-step 0.002 \
+  --max-joint-travel 2.10 \
+  --velocity-scaling 0.03 \
+  --acceleration-scaling 0.03
+```
+
+물체가 없는 시연 모드의 전체 실행 명령은 다음과 같습니다.
+
+```bash
+ros2 run ur3_moveit_examples ik_pick_and_place_demo \
+  --execute \
+  --allow-empty-grip \
+  --approach-height 0.05 \
+  --max-step 0.002 \
+  --max-joint-travel 2.10 \
+  --velocity-scaling 0.03 \
+  --acceleration-scaling 0.03
+```
+
+실제 물체를 사용할 때는 `--allow-empty-grip`을 제거합니다. Point 1/2의 낮은 TCP 높이와
+실제 그리퍼·작업대가 현재 MoveIt 충돌 모델에 충분히 반영되었는지 별도로 확인해야 합니다.

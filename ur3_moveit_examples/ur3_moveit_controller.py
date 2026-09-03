@@ -233,13 +233,14 @@ class UR3MoveItController(Node):
         qw: float,
         *,
         execute: bool = False,
+        ik_seed_positions: list[float] | tuple[float, ...] | None = None,
     ) -> bool:
         target = self._make_pose(x, y, z, qx, qy, qz, qw)
         if not self._wait_for_moveit(execute=execute, needs_ik=True):
             return False
         if self.get_current_joint_positions() is None:
             return False
-        ik_positions = self._compute_nearby_ik(target)
+        ik_positions = self._compute_nearby_ik(target, ik_seed_positions)
         if ik_positions is None:
             return False
 
@@ -600,7 +601,22 @@ class UR3MoveItController(Node):
         target.orientation.w = qw / norm
         return target
 
-    def _compute_nearby_ik(self, target: Pose) -> list[float] | None:
+    def _compute_nearby_ik(
+        self,
+        target: Pose,
+        seed_positions: list[float] | tuple[float, ...] | None = None,
+    ) -> list[float] | None:
+        if seed_positions is None:
+            seed = [self._joint_positions[name] for name in UR_JOINT_NAMES]
+            seed_description = "the current state"
+        else:
+            if len(seed_positions) != len(UR_JOINT_NAMES) or not all(
+                math.isfinite(value) for value in seed_positions
+            ):
+                raise ValueError("IK seed must contain six finite joint positions")
+            seed = list(seed_positions)
+            seed_description = "the supplied taught joint seed"
+
         request = GetPositionIK.Request()
         ik = request.ik_request
         ik.group_name = self.group
@@ -610,14 +626,14 @@ class UR3MoveItController(Node):
         ik.pose_stamped.header.stamp = self.get_clock().now().to_msg()
         ik.pose_stamped.pose = target
         ik.robot_state.joint_state.name = list(UR_JOINT_NAMES)
-        ik.robot_state.joint_state.position = [
-            self._joint_positions[name] for name in UR_JOINT_NAMES
-        ]
+        ik.robot_state.joint_state.position = seed
         ik.robot_state.is_diff = False
         ik.timeout.sec = int(self.ik_timeout)
         ik.timeout.nanosec = int((self.ik_timeout - int(self.ik_timeout)) * 1.0e9)
 
-        self.get_logger().info("Computing collision-aware IK from the current state ...")
+        self.get_logger().info(
+            f"Computing collision-aware IK using {seed_description} ..."
+        )
         future = self._ik_client.call_async(request)
         rclpy.spin_until_future_complete(self, future)
         response = future.result()

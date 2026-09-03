@@ -1,0 +1,10 @@
+ros2 launch ur_robot_driver ur_control.launch.py   ur_type:=ur3   robot_ip:=192.168.1.11   kinematics_params_file:=$HOME/ur3_calibration.yaml   launch_rviz:=false
+ros2 launch ur_moveit_config ur_moveit.launch.py   ur_type:=ur3   robot_ip:=192.168.1.11   launch_rviz:=true
+ros2 run ur3_moveit_examples arm_sweep_demo   --motion-scale 2.0   --execute   --dwell-time 0.8   --max-joint-travel 0.30   --velocity-scaling 0.03   --acceleration-scaling 0.03
+
+홈위치
+ros2 run ur3_moveit_examples pick_and_place_fk_demo \
+  --execute \
+  --max-joint-travel 2.10 \
+  --velocity-scaling 0.03 \
+  --acceleration-scaling 0.03
