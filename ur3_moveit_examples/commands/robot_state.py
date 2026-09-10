@@ -7,7 +7,7 @@ import sys
 
 import rclpy
 
-from ur3_moveit_examples.ur3_moveit_controller import (
+from ur3_moveit_examples.core.ur3_moveit_controller import (
     UR3MoveItController,
     UR_JOINT_NAMES,
 )

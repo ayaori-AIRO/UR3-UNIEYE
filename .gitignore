@@ -19,3 +19,6 @@ log/
 .env
 *.key
 *.pem
+
+# Local neural-network weights
+models/

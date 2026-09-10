@@ -10,22 +10,22 @@ import xmlrpc.client
 
 import rclpy
 
-from ur3_moveit_examples.pick_and_place_points import (
+from ur3_moveit_examples.pick_place.pick_and_place_points import (
     HOME_JOINTS,
     POINT1_JOINTS,
     POINT2_JOINTS,
 )
-from ur3_moveit_examples.ur3_moveit_controller import (
+from ur3_moveit_examples.core.ur3_moveit_controller import (
     UR3MoveItController,
     UR_JOINT_NAMES,
 )
-from ur3_moveit_examples.weiss_gripper import (
+from ur3_moveit_examples.gripper.weiss_gripper import (
     HOLDING,
     NO_PART,
     WeissGripper,
     WeissGripperError,
 )
-from ur3_moveit_examples.weiss_gripper_read_state import (
+from ur3_moveit_examples.gripper.weiss_gripper_read_state import (
     DEFAULT_DEVICE_ID,
     DEFAULT_URL,
 )

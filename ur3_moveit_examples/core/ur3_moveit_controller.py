@@ -14,7 +14,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from ur3_moveit_examples.trajectory_safety import (
+from ur3_moveit_examples.core.trajectory_safety import (
     joint_excursions,
     trajectory_duration_seconds,
 )

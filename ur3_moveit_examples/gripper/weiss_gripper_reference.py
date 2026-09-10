@@ -7,7 +7,7 @@ import sys
 import time
 import xmlrpc.client
 
-from ur3_moveit_examples.weiss_gripper_read_state import (
+from ur3_moveit_examples.gripper.weiss_gripper_read_state import (
     DEFAULT_DEVICE_ID,
     DEFAULT_URL,
     STATE_NAMES,
