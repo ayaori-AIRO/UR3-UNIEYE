@@ -3,9 +3,95 @@
 실제 Universal Robots UR3를 ROS 2 Humble과 MoveIt 2로 제어하기 위한 예제 패키지입니다.
 
 D405 끝단 장착 모델과 실행 방법은 [D405 Description 안내](docs/d405_description.md)를
-참고하세요. 현재는 플랜지 위쪽에 사진 기준으로 배치한 **미보정 임시 모델**입니다.
+참고하세요. 사진 기반 임시 배치 이후 핸드아이 보정값을 시험 적용했습니다.
+적용 과정과 한계는 [핸드아이 적용 안내](docs/handeye_application.md)를 참고하세요.
 
 체커보드 검출 후에는 [수동 Hand-eye 샘플 수집](docs/handeye_capture.md)을 참고하세요.
+
+## 현재 진행 상태: D405 가위 자동 인식 및 접근
+
+현재 그리퍼 없이 D405를 끝단에 장착한 Eye-in-Hand 구성입니다.
+사용자가 실제 로봇에서 다음 흐름의 실행 성공 및 가위 위치 변경 후 접근 성공을
+확인했습니다. 이는 제한된 시험 결과이며 다양한 조건의 정확도/안전 보증은 아닙니다.
+
+**HOME → 관찰 위치 → YOLO 검출 → 표면점 자동 선택 → 깊이 기반 3D 좌표 →
+base_link 변환 → 현재 관절 seed IK → 가위 위 200mm 접근**
+
+- HOME은 저장된 관절 목표로 이동합니다. 관찰 위치는 티칭 seed 기반 IK입니다.
+- 자동 검출은 YOLO + GrabCut 표면 추정입니다. 검출/깊이/TF 검사 실패 시 재시도하고
+  첫 유효 신규 좌표만 고정합니다. IK/계획/실행 실패 시에는 중단합니다.
+- `--auto` 기본은 first-valid이며 `--confidence`를 적용합니다.
+  과거 8회 중 5회 누적 정책은 `--auto-policy stable` 선택 시에만 사용합니다.
+- 목표 방향은 저장된 관찰 자세이며 접근 IK seed는 현재 관절값입니다.
+  가위 방향 추정/집기 자세 생성/물체 추적은 아직 하지 않습니다.
+- HOME 제한은 `--home-max-joint-travel` 기본 **2.15rad**, 관찰/접근 제한은
+  `--max-joint-travel` 기본 **2.10rad**로 분리했습니다. 물리적 관절 한계 변경이
+  아니라 예제의 이동량 검사 설정입니다. HOME 후 원래 제한을 복원합니다.
+- full 실행 시 원본 라이브 창을 처음부터 유지합니다. 검출 창은 관찰 도착 후
+  별도로 열리고 목표 확정 시 종료됩니다. 정상 접근 완료 후에도 라이브 창은 남으며
+  Q/ESC 또는 터미널 Ctrl+C로 종료합니다. **뷰어 닫기는 로봇 정지 명령이 아닙니다.**
+- 그리퍼 작동, 표면까지 하강, 자동 HOME 복귀는 없습니다.
+
+### 준비 및 실행
+
+Driver와 MoveIt 모두 실제 로봇 보정 파일을 사용하세요. MoveIt은 프로젝트의
+`ur3_d405_moveit.launch.py`를 사용합니다. 상세 명령은
+[D405 안내](docs/d405_description.md)와 [시나리오 안내](docs/eye_in_hand_observation.md)에 있습니다.
+
+카메라는 한 번만 실행하며 컬러 정렬 깊이를 켭니다:
+
+```bash
+ros2 launch realsense2_camera rs_launch.py \
+  camera_name:=camera camera_namespace:=camera \
+  enable_color:=true enable_depth:=true \
+  align_depth.enable:=true enable_sync:=true publish_tf:=true
+```
+
+Driver/MoveIt/External Control과 카메라를 준비하고, 기존 `scissors_position` 및
+YOLO 라이브 노드는 종료하세요. full이 전용 검출 프로세스를 시작/정리합니다.
+
+```bash
+ros2 run ur3_moveit_examples eye_in_hand_pick_and_place \
+  --stage full --execute \
+  --approach-height 0.20 --confidence 0.4 --candidate-timeout 0 \
+  --home-max-joint-travel 2.15 --max-joint-travel 2.10 \
+  --velocity-scaling 0.03 --acceleration-scaling 0.03
+```
+
+**위 명령은 실제로 움직이며, 후보 확정 후 추가 승인창 없이 접근합니다.**
+`--candidate-timeout 0`은 인식 대기만 무기한이라는 뜻입니다.
+`--execute`를 빼면 현재 → HOME만 계획하며 전체 시나리오를 미리 검증하지 않습니다.
+`--no-live-view`로 상시 뷰어를 비활성화할 수 있습니다.
+
+### 개별 점검 및 알려진 한계
+
+```bash
+# 현재 관절/TCP
+ros2 run ur3_moveit_examples robot_state
+# HOME 계획만
+ros2 run ur3_moveit_examples eye_in_hand_pick_and_place --stage home
+# 자동 검출만 (로봇 이동 없음)
+ros2 run ur3_moveit_examples scissors_position --auto --confidence 0.4
+```
+
+RViz Fixed Frame은 `base_link`, 자동 Marker 토픽은
+`/scissors/auto_preview_marker`, 수동 클릭 Marker는 `/scissors/candidate_marker`입니다.
+후보 마커와 포인트클라우드의 시각적 일치 및 동일 표면점 반복 측정은 확인했습니다.
+그러나 같은 깊이/TF를 사용하는 표시끼리의 일치가 절대 정확도를 보장하지는 않습니다.
+
+핸드아이 독립 검증의 위치 RMS는 약 3.75mm, 최대 잔차는 약 5.21mm이며
+사용자 동의로 시험 적용했습니다. 상세 수치는 [분석 문서](docs/handeye_analysis.md)를
+참고하세요. 카메라 고정 상태가 바뀌면 보정을 재확인해야 합니다.
+
+간헐적인 RGB/깊이 시각 차이 및 TF 미래 외삽 경고는 해당 시도를 거부합니다.
+현재 동기화 검사 한도는 완화하지 않았습니다. GrabCut은 가위 전용 분할 모델이
+아니므로 배경 오선택 가능성이 남아 있습니다. 한 번의 오검출로도 목표가 채택될 수 있습니다.
+포인트클라우드를 RViz에 표시해도 작업대가 자동으로 MoveIt 충돌 물체가 되지는 않습니다.
+200mm는 최종 tool0 목표의 높이이며 전체 경로의 카메라/케이블 여유를 보장하지 않습니다.
+
+모델 `models/scissors_best.pt`, 로컬 `calibration_results/`와 실제 로봇 보정 YAML은
+Git에 포함하지 않습니다. 새 환경에는 별도로 준비해야 합니다.
+다음 작업은 작업 영역 내 위치/방향 변화, 가위 부재 및 오검출 조건 반복 시험입니다.
 
 이 패키지는 MoveIt의 `moveit_msgs/action/MoveGroup` 액션을 사용합니다. 코드에서
 `FollowJointTrajectory` 액션을 직접 전송하지 않으며, MoveIt이 다음 작업을 수행합니다.

@@ -96,6 +96,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--velocity-scaling", type=unit_interval, default=0.03)
     parser.add_argument("--acceleration-scaling", type=unit_interval, default=0.03)
     parser.add_argument("--max-joint-travel", type=positive, default=2.10)
+    parser.add_argument("--home-max-joint-travel", type=positive, default=2.15,
+                        help="HOME-only joint travel limit in rad (default: 2.15)")
     parser.add_argument("--planning-time", type=positive, default=10.0)
     parser.add_argument("--planning-attempts", type=int, default=10)
     parser.add_argument("--verify-joint-tolerance", type=positive, default=0.01)
@@ -109,6 +111,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--candidate-source", choices=("manual", "auto"), default="manual")
     parser.add_argument("--confidence", type=unit_interval, default=0.4)
     parser.add_argument("--settle-time", type=positive, default=1.0)
+    parser.add_argument("--no-live-view", action="store_true",
+                        help="disable the continuous raw camera viewer for full stage")
     args = parser.parse_args(argv)
     if args.planning_attempts < 1:
         parser.error("--planning-attempts must be at least 1")
@@ -224,12 +228,24 @@ def log_home(robot: UR3MoveItController, execute: bool) -> None:
     )
 
 
+def move_home(robot, cli):
+    previous_limit = robot.max_joint_travel
+    try:
+        robot.max_joint_travel = cli.home_max_joint_travel
+        robot.get_logger().warn(
+            f"HOME-only joint travel limit: {cli.home_max_joint_travel:.3f} rad; "
+            f"other stages remain at {previous_limit:.3f} rad")
+        return robot.move_to_joint(list(HOME_JOINTS), execute=cli.execute)
+    finally:
+        robot.max_joint_travel = previous_limit
+
+
 def run_stages(robot: UR3MoveItController, cli: argparse.Namespace) -> bool:
     if cli.stage == "approach":
         return approach_candidate(robot, cli)
     if cli.stage in ("sequence", "home", "full"):
         log_home(robot, cli.execute)
-        if not robot.move_to_joint(list(HOME_JOINTS), execute=cli.execute):
+        if not move_home(robot, cli):
             return False
         if cli.stage == "home":
             return True
@@ -274,8 +290,19 @@ def main(args=None) -> None:
     )
 
     success = False
+    viewer = None
     try:
+        if cli.stage == 'full' and not cli.no_live_view:
+            viewer = subprocess.Popen([
+                sys.executable, '-c',
+                'from ur3_moveit_examples.vision.camera_live import main; main()',
+            ])
         success = run_stages(robot, cli)
+        if success and viewer is not None and viewer.poll() is None:
+            robot.get_logger().info('Scenario complete; no more motion. Live view remains open. '
+                                    'Press q/ESC in live view or Ctrl+C here to finish.')
+            while rclpy.ok() and viewer.poll() is None:
+                rclpy.spin_once(robot, timeout_sec=0.1)
     except KeyboardInterrupt:
         robot.get_logger().warn("Interrupted by user.")
     except Exception as exc:
@@ -283,6 +310,8 @@ def main(args=None) -> None:
             f"Scenario stopped: {type(exc).__name__}: {exc}"
         )
     finally:
+        if viewer is not None:
+            stop_detector(viewer)
         robot.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
