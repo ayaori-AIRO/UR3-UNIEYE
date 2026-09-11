@@ -10,6 +10,8 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
+        ("share/" + package_name + "/launch", ["launch/ur3_d405_moveit.launch.py"]),
+        ("share/" + package_name + "/urdf", ["urdf/ur3_d405.urdf.xacro"]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -19,6 +21,9 @@ setup(
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
+            "scissors_position = ur3_moveit_examples.vision.scissors_position:main",
+            "handeye_capture = ur3_moveit_examples.vision.handeye_capture:main",
+            "checkerboard_live = ur3_moveit_examples.vision.checkerboard_live:main",
             "approach_retreat_demo = ur3_moveit_examples.demos.approach_retreat_demo:main",
             "arm_sweep_demo = ur3_moveit_examples.demos.arm_sweep_demo:main",
             "eye_in_hand_pick_and_place = ur3_moveit_examples.pick_place.eye_in_hand_pick_and_place:main",

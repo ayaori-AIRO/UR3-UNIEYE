@@ -2,6 +2,11 @@
 
 실제 Universal Robots UR3를 ROS 2 Humble과 MoveIt 2로 제어하기 위한 예제 패키지입니다.
 
+D405 끝단 장착 모델과 실행 방법은 [D405 Description 안내](docs/d405_description.md)를
+참고하세요. 현재는 플랜지 위쪽에 사진 기준으로 배치한 **미보정 임시 모델**입니다.
+
+체커보드 검출 후에는 [수동 Hand-eye 샘플 수집](docs/handeye_capture.md)을 참고하세요.
+
 이 패키지는 MoveIt의 `moveit_msgs/action/MoveGroup` 액션을 사용합니다. 코드에서
 `FollowJointTrajectory` 액션을 직접 전송하지 않으며, MoveIt이 다음 작업을 수행합니다.
 

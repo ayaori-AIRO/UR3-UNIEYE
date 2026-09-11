@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Eye-in-Hand pick-and-place scenario, implemented one safe stage at a time.
 
-Current stage: plan or execute a move to the taught HOME joint position.
+Current stages: HOME joint goal, then a seeded IK observation pose.
 Future stages will add camera calibration, grasp-pose input, TF conversion,
 approach/retreat, and gripper operation after each stage is independently
 verified on the real system.
@@ -10,8 +10,11 @@ verified on the real system.
 import argparse
 import math
 import sys
+import time
+import subprocess
 
 import rclpy
+from geometry_msgs.msg import PointStamped
 
 from ur3_moveit_examples.core.ur3_moveit_controller import (
     UR3MoveItController,
@@ -41,6 +44,16 @@ HOME_TCP_POSE = (
     -0.268337,
 )
 
+# Taught scissors observation configuration: IK search seed, not a motion goal.
+OBSERVATION_JOINT_SEED = (
+    1.580786, -1.751029, -1.695628, -1.270584, 1.622455, 0.954812,
+)
+# Target base_link -> tool0: metres, quaternion xyzw.
+OBSERVATION_TCP_POSE = (
+    -0.102946, -0.333081, 0.244248,
+    0.454060, 0.890464, 0.016411, 0.025199,
+)
+
 
 def positive(value: str) -> float:
     parsed = float(value)
@@ -56,12 +69,24 @@ def unit_interval(value: str) -> float:
     return parsed
 
 
+def nonnegative(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError('must be finite and nonnegative')
+    return parsed
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Plan (default) or execute the HOME stage of the Eye-in-Hand "
+            "Plan (default) or execute HOME then observation in the Eye-in-Hand "
             "pick-and-place scenario through MoveIt 2."
         )
+    )
+    parser.add_argument(
+        "--stage", choices=("sequence", "home", "observe", "approach", "full"), default="sequence",
+        help="sequence: HOME then observation; home/observe: only that stage. "
+        "Plan-only sequence checks current -> HOME only.",
     )
     parser.add_argument(
         "--execute",
@@ -77,10 +102,111 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--verify-timeout", type=positive, default=5.0)
     parser.add_argument("--server-timeout", type=positive, default=10.0)
     parser.add_argument("--group", default="ur_manipulator")
+    parser.add_argument("--approach-height", type=positive,
+                        help="required for approach: tool0 height above clicked point in base Z, metres")
+    parser.add_argument("--candidate-timeout", type=nonnegative, default=60.0,
+                        help="seconds to wait; 0 means unlimited until Ctrl+C")
+    parser.add_argument("--candidate-source", choices=("manual", "auto"), default="manual")
+    parser.add_argument("--confidence", type=unit_interval, default=0.4)
+    parser.add_argument("--settle-time", type=positive, default=1.0)
     args = parser.parse_args(argv)
     if args.planning_attempts < 1:
         parser.error("--planning-attempts must be at least 1")
+    if args.stage in ("approach", "full") and (
+            args.approach_height is None or args.approach_height < 0.10):
+        parser.error("approach requires --approach-height >= 0.10 m; clearance is not guaranteed")
+    if args.stage == "full":
+        args.candidate_source = "auto"
     return args
+
+
+def candidate_target(msg, now_ns, started_ns, height):
+    stamp = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+    xyz = (msg.point.x, msg.point.y, msg.point.z)
+    if msg.header.frame_id != "base_link" or not all(map(math.isfinite, xyz)):
+        raise ValueError("candidate must be finite and in base_link")
+    if stamp <= started_ns or not 0 <= (now_ns-stamp)*1e-9 <= 15.0:
+        raise ValueError("use a NEW snapshot after starting approach (maximum age 15 s)")
+    return (*xyz[:2], xyz[2] + height, *OBSERVATION_TCP_POSE[3:])
+
+
+def approach_candidate(robot, cli, detector=None):
+    """One-shot operator point; never subscribe continuously during execution."""
+    started = robot.get_clock().now().nanoseconds
+    targets = []
+
+    def receive(msg):
+        if targets:
+            return
+        try:
+            targets.append(candidate_target(
+                msg, robot.get_clock().now().nanoseconds, started, cli.approach_height))
+        except ValueError as exc:
+            robot.get_logger().warn(f"Candidate rejected: {exc}")
+
+    topic = ("/scissors/auto_preview_point" if cli.candidate_source == "auto"
+             else "/scissors/candidate_point")
+    subscription = robot.create_subscription(PointStamped, topic, receive, 1)
+    robot.get_logger().warn(
+        "Keep robot/object stopped. "
+        + ("Automatic point input enabled. " if cli.candidate_source == "auto"
+           else "In scissors_position press R, S, then click ONCE. ") +
+        "Waiting for a new point; first valid point is frozen. "
+        f"tool0 clearance above point={cli.approach_height:.3f} m. "
+        "This is NOT guaranteed camera/table clearance.")
+    deadline = (time.monotonic() + cli.candidate_timeout
+                if cli.candidate_timeout else math.inf)
+    try:
+        while rclpy.ok() and not targets and time.monotonic() < deadline:
+            if detector is not None and detector.poll() is not None:
+                robot.get_logger().error('Automatic detector exited; scenario stopped.')
+                return False
+            rclpy.spin_once(robot, timeout_sec=0.1)
+    finally:
+        robot.destroy_subscription(subscription)
+    if not targets:
+        robot.get_logger().error("No valid new candidate received; no motion.")
+        return False
+    target = targets[0]
+    if detector is not None:
+        stop_detector(detector)
+    robot.get_logger().warn(
+        f"Frozen approach base_link -> tool0: {target}; "
+        "orientation is taught observation orientation. IK seed = fresh current joints. "
+        "No descent, grip, tracking, or return HOME.")
+    # move_to_pose reads fresh joints and uses them as IK seed when none is supplied.
+    return robot.move_to_pose(*target, execute=cli.execute)
+
+
+def stop_detector(detector):
+    if detector.poll() is None:
+        detector.terminate()
+        try:
+            detector.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            detector.kill()
+            detector.wait(timeout=3)
+
+
+def automatic_approach(robot, cli):
+    # Spin while stationary so joint/TF subscriptions continue to receive data.
+    deadline = time.monotonic() + cli.settle_time
+    while rclpy.ok() and time.monotonic() < deadline:
+        rclpy.spin_once(robot, timeout_sec=0.1)
+    if not rclpy.ok():
+        return False
+    robot.get_logger().warn('Starting automatic detector after observation arrival. '
+                            'First valid target will trigger planning/execution; no extra prompt.')
+    # Launch Python directly, without a shell or a ros2-run wrapper to leave behind.
+    detector = subprocess.Popen([
+        sys.executable, '-c',
+        'from ur3_moveit_examples.vision.scissors_position import main; main()',
+        '--auto', '--auto-policy', 'first-valid', '--confidence', str(cli.confidence),
+    ])
+    try:
+        return approach_candidate(robot, cli, detector)
+    finally:
+        stop_detector(detector)
 
 
 def log_home(robot: UR3MoveItController, execute: bool) -> None:
@@ -96,6 +222,38 @@ def log_home(robot: UR3MoveItController, execute: bool) -> None:
         f"position=({x:.6f}, {y:.6f}, {z:.6f}), "
         f"quaternion=({qx:.6f}, {qy:.6f}, {qz:.6f}, {qw:.6f})"
     )
+
+
+def run_stages(robot: UR3MoveItController, cli: argparse.Namespace) -> bool:
+    if cli.stage == "approach":
+        return approach_candidate(robot, cli)
+    if cli.stage in ("sequence", "home", "full"):
+        log_home(robot, cli.execute)
+        if not robot.move_to_joint(list(HOME_JOINTS), execute=cli.execute):
+            return False
+        if cli.stage == "home":
+            return True
+        if not cli.execute:
+            robot.get_logger().warn(
+                "PLAN ONLY: checked current -> HOME only. No observation plan "
+                "or motion. At HOME, use --stage observe to preview the IK leg."
+            )
+            return True
+
+    robot.get_logger().warn(
+        "Observation stage: seeded IK to the taught base_link -> tool0 pose. "
+        "No YOLO, gripper operation, or automatic return HOME."
+    )
+    reached = robot.move_to_pose(
+        *OBSERVATION_TCP_POSE,
+        execute=cli.execute,
+        ik_seed_positions=OBSERVATION_JOINT_SEED,
+    )
+    if not reached:
+        return False
+    if cli.stage == "full":
+        return automatic_approach(robot, cli)
+    return True
 
 
 def main(args=None) -> None:
@@ -117,13 +275,12 @@ def main(args=None) -> None:
 
     success = False
     try:
-        log_home(robot, cli.execute)
-        success = robot.move_to_joint(list(HOME_JOINTS), execute=cli.execute)
+        success = run_stages(robot, cli)
     except KeyboardInterrupt:
         robot.get_logger().warn("Interrupted by user.")
     except Exception as exc:
         robot.get_logger().error(
-            f"HOME stage failed: {type(exc).__name__}: {exc}"
+            f"Scenario stopped: {type(exc).__name__}: {exc}"
         )
     finally:
         robot.destroy_node()

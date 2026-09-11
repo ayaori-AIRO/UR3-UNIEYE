@@ -8,3 +8,22 @@ ros2 run ur3_moveit_examples pick_and_place_fk_demo \
   --max-joint-travel 2.10 \
   --velocity-scaling 0.03 \
   --acceleration-scaling 0.03
+
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 launch ur_moveit_config ur_moveit.launch.py \
+  ur_type:=ur3 \
+  robot_ip:=192.168.1.11 \
+  description_file:=/home/unieye/ros2_ws/src/ur3_moveit_examples/urdf/ur3_d405.urdf.xacro \
+  launch_rviz:=true
+
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+
+ros2 launch ur_robot_driver ur_control.launch.py \
+  ur_type:=ur3 \
+  robot_ip:=192.168.1.11 \
+  kinematics_params_file:=$HOME/ur3_calibration.yaml \
+  description_file:=/home/unieye/ros2_ws/src/ur3_moveit_examples/urdf/ur3_d405.urdf.xacro \
+  launch_rviz:=false
