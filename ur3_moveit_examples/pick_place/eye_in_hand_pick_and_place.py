@@ -205,7 +205,7 @@ def automatic_approach(robot, cli):
     detector = subprocess.Popen([
         sys.executable, '-c',
         'from ur3_moveit_examples.vision.scissors_position import main; main()',
-        '--auto', '--auto-policy', 'first-valid', '--confidence', str(cli.confidence),
+        '--auto', '--no-window', '--auto-policy', 'first-valid', '--confidence', str(cli.confidence),
     ])
     try:
         return approach_candidate(robot, cli, detector)

@@ -13,9 +13,14 @@ def main():
     node = Node('scenario_camera_live')
     bridge = CvBridge()
     latest = [None, 0.0]
+    annotated = [None, 0.0]
     def receive(msg):
         latest[:] = [msg, time.monotonic()]
     node.create_subscription(Image, '/camera/camera/color/image_raw', receive,
+                             qos_profile_sensor_data)
+    def receive_annotated(msg):
+        annotated[:] = [msg, time.monotonic()]
+    node.create_subscription(Image, '/scissors/preview_image', receive_annotated,
                              qos_profile_sensor_data)
     try:
         cv2.namedWindow('D405 continuous live')
@@ -25,7 +30,11 @@ def main():
                 frame = bridge.imgmsg_to_cv2(latest[0], 'bgr8').copy()
                 label = ('STALE IMAGE' if time.monotonic()-latest[1] > 1
                          else 'LIVE - viewer only; q closes view, NOT robot stop')
-                cv2.putText(frame, label, (10,25), cv2.FONT_HERSHEY_SIMPLEX,
+                # Display the actual inference frame, never paste old boxes onto new RGB.
+                if annotated[0] is not None and time.monotonic()-annotated[1] < 1.0:
+                    frame = bridge.imgmsg_to_cv2(annotated[0], 'bgr8').copy()
+                    label = 'DETECTION SNAPSHOT - returns to live after 1s'
+                cv2.putText(frame, label, (10,frame.shape[0]-12), cv2.FONT_HERSHEY_SIMPLEX,
                             .5, (0,255,255), 1)
                 cv2.imshow('D405 continuous live', frame)
             if cv2.waitKey(1) & 0xff in (ord('q'),27):

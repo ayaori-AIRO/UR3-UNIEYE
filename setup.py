@@ -21,6 +21,7 @@ setup(
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
+            "zimmer_gripper = ur3_moveit_examples.gripper.zimmer_gripper:main",
             "scissors_position = ur3_moveit_examples.vision.scissors_position:main",
             "handeye_capture = ur3_moveit_examples.vision.handeye_capture:main",
             "checkerboard_live = ur3_moveit_examples.vision.checkerboard_live:main",

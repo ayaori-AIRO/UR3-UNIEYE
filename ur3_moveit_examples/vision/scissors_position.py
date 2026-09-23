@@ -127,8 +127,11 @@ class ScissorsPosition(Node):
             self.create_subscription(Image, cli.depth_topic, self.depths.append, qos_profile_sensor_data),
             self.create_subscription(CameraInfo, cli.info_topic, self.on_info, qos_profile_sensor_data),
         ]
-        cv2.namedWindow('Scissors position')
-        cv2.setMouseCallback('Scissors position', self.on_click)
+        self.image_pub = self.create_publisher(
+            Image, '/scissors/preview_image', qos_profile_sensor_data)
+        if not cli.no_window:
+            cv2.namedWindow('Scissors position')
+            cv2.setMouseCallback('Scissors position', self.on_click)
         self.timer = self.create_timer(0.1, self.preview)
         self.get_logger().info(
             'READ ONLY. Keep robot/object stopped. s: detect and freeze; '
@@ -194,6 +197,7 @@ class ScissorsPosition(Node):
         drawn = frame.copy()
         for x1, y1, x2, y2 in boxes:
             cv2.rectangle(drawn, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 2)
+        self.publish_image(drawn, rgb.header)
         cv2.putText(drawn, 'FROZEN: click scissors surface; r = live',
                     (10,25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
         self.snapshot = (drawn, self.bridge.imgmsg_to_cv2(depth, 'passthrough'),
@@ -221,10 +225,16 @@ class ScissorsPosition(Node):
                         ('VALID PREVIEW' if stable is not None else 'ACCUMULATING'),
                         (10,25), cv2.FONT_HERSHEY_SIMPLEX, .6, (0,255,255), 2)
             cv2.circle(drawn, (u,v), 5, (0,0,255), 2)
+            self.publish_image(drawn, rgb.header)
             if stable is not None:
                 # Publish newest measured point, not a median with a mismatched stamp.
                 self.publish_point(base, rgb.header)
                 self.get_logger().info(f'AUTO PREVIEW base_link [m]: {base.tolist()}')
+
+    def publish_image(self, frame, header):
+        msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+        msg.header = header
+        self.image_pub.publish(msg)
 
     def publish_point(self, base, header):
         msg = PointStamped()
@@ -294,6 +304,8 @@ class ScissorsPosition(Node):
                     self.capture()
             if self.snapshot is not None and time.monotonic()-self.snapshot[-1] > 10:
                 self.clear()
+            if self.cli.no_window:
+                return
             if self.snapshot is not None:
                 cv2.imshow('Scissors position', self.snapshot[0])
             elif self.rgb is not None:
@@ -309,7 +321,7 @@ class ScissorsPosition(Node):
         except Exception as exc:
             if self.cli.auto:
                 self.auto_history.append(None)
-                if cv2.waitKey(1) & 0xff in (ord('q'), 27):
+                if not self.cli.no_window and cv2.waitKey(1) & 0xff in (ord('q'), 27):
                     rclpy.shutdown()
             self.clear()
             self.get_logger().warning(f'Snapshot rejected: {exc}')
@@ -318,6 +330,8 @@ class ScissorsPosition(Node):
 def main(args=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', default=str(DEFAULT_MODEL))
+    parser.add_argument('--no-window', action='store_true',
+                        help='publish preview images instead of opening a detector window (auto only)')
     parser.add_argument('--auto', action='store_true',
                         help='automatic point preview; retries until stopped, no motion')
     parser.add_argument('--auto-policy', choices=('first-valid', 'stable'),
@@ -330,6 +344,8 @@ def main(args=None):
         sys.argv if args is None else [sys.argv[0], *args])[1:])
     if not 0 < cli.confidence <= 1:
         parser.error('confidence must be in (0,1]')
+    if cli.no_window and not cli.auto:
+        parser.error('--no-window requires --auto; manual mode needs clicks')
     rclpy.init(args=args)
     node = None
     try:
@@ -340,6 +356,7 @@ def main(args=None):
     finally:
         if node is not None:
             node.destroy_node()
-        cv2.destroyAllWindows()
+        if not cli.no_window:
+            cv2.destroyAllWindows()
         if rclpy.ok():
             rclpy.shutdown()
